@@ -144,12 +144,13 @@ class AudioRenderer {
       _logger.w('Cannot set stream - audio renderer not initialized');
       return;
     }
-    
+
     _renderer.srcObject = stream;
-    
+
     if (stream != null) {
       final audioTracks = stream.getAudioTracks();
-      _logger.i('Audio stream (${stream.id}) attached to renderer with ${audioTracks.length} audio track(s)');
+      _logger.i(
+          'Audio stream (${stream.id}) attached to renderer with ${audioTracks.length} audio track(s)');
       for (var track in audioTracks) {
         _logger.i('  - Audio track: ${track.id}, enabled=${track.enabled}');
       }

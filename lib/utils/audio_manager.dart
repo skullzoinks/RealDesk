@@ -173,15 +173,17 @@ class AudioManager {
       // Always enable the track first
       track.enabled = _enabled && !_muted;
       _logger.d('Track ${_trackKey(track)} enabled set to: ${track.enabled}');
-      
+
       // Try to set volume via Helper API
       try {
         await Helper.setVolume(effectiveVolume, track);
-        _logger.d('Volume set to ${effectiveVolume} for track ${_trackKey(track)}');
+        _logger.d(
+            'Volume set to ${effectiveVolume} for track ${_trackKey(track)}');
       } catch (volumeError) {
         // Volume setting may not be supported on all platforms (Windows desktop)
         // This is not fatal - the track will still play at system volume
-        _logger.d('Helper.setVolume not supported on this platform: $volumeError');
+        _logger
+            .d('Helper.setVolume not supported on this platform: $volumeError');
       }
     } catch (e) {
       _logger
@@ -213,7 +215,8 @@ class AudioManager {
         break;
       default:
         // Desktop/web platforms do not need explicit routing tweaks.
-        _logger.d('Desktop platform detected, skipping audio session configuration');
+        _logger.d(
+            'Desktop platform detected, skipping audio session configuration');
         break;
     }
 

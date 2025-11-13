@@ -1228,7 +1228,8 @@ class _SessionPageState extends State<SessionPage> {
                         color: Colors.transparent,
                         child: RTCVideoView(
                           _audioRenderer!.renderer,
-                          objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                          objectFit:
+                              RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                           mirror: false,
                         ),
                       ),
