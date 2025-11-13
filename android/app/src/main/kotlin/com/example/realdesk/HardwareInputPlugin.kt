@@ -86,6 +86,13 @@ class HardwareInputPlugin(private val activity: Activity) :
             inputManager.registerInputDeviceListener(this, handler)
             isListening = true
         }
+        // Emit initial connection events for already attached controllers.
+        inputManager.inputDeviceIds.forEach { id ->
+            if (isGamepadDevice(id)) {
+                states.getOrPut(id) { GamepadState() }
+                emitConnection(id, true)
+            }
+        }
     }
 
     override fun onCancel(arguments: Any?) {
@@ -146,10 +153,21 @@ class HardwareInputPlugin(private val activity: Activity) :
         val buttons = ArrayList<Boolean>(state.buttons.size)
         state.buttons.mapTo(buttons) { it }
         val payload = hashMapOf<String, Any>(
+            "kind" to "state",
             "deviceId" to deviceId,
             "timestamp" to timestamp,
             "axes" to axes,
             "buttons" to buttons,
+        )
+        sink.success(payload)
+    }
+
+    private fun emitConnection(deviceId: Int, connected: Boolean) {
+        val sink = eventSink ?: return
+        val payload = hashMapOf<String, Any>(
+            "kind" to "connection",
+            "deviceId" to deviceId,
+            "connected" to connected,
         )
         sink.success(payload)
     }
@@ -162,16 +180,20 @@ class HardwareInputPlugin(private val activity: Activity) :
     override fun onInputDeviceAdded(deviceId: Int) {
         if (isGamepadDevice(deviceId)) {
             states[deviceId] = GamepadState()
+            emitConnection(deviceId, true)
         }
     }
 
     override fun onInputDeviceRemoved(deviceId: Int) {
-        states.remove(deviceId)
+        if (states.remove(deviceId) != null) {
+            emitConnection(deviceId, false)
+        }
     }
 
     override fun onInputDeviceChanged(deviceId: Int) {
         if (isGamepadDevice(deviceId)) {
             states[deviceId] = GamepadState()
+            emitConnection(deviceId, true)
         }
     }
 

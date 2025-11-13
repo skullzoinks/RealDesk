@@ -124,6 +124,9 @@ class AudioRenderer {
   final Logger _logger;
   bool _initialized = false;
 
+  /// Get the underlying renderer (needed for rendering in widget tree)
+  RTCVideoRenderer get renderer => _renderer;
+
   Future<void> initialize() async {
     if (_initialized) return;
 
@@ -137,8 +140,22 @@ class AudioRenderer {
   }
 
   void setStream(MediaStream? stream) {
-    if (!_initialized) return;
+    if (!_initialized) {
+      _logger.w('Cannot set stream - audio renderer not initialized');
+      return;
+    }
+    
     _renderer.srcObject = stream;
+    
+    if (stream != null) {
+      final audioTracks = stream.getAudioTracks();
+      _logger.i('Audio stream (${stream.id}) attached to renderer with ${audioTracks.length} audio track(s)');
+      for (var track in audioTracks) {
+        _logger.i('  - Audio track: ${track.id}, enabled=${track.enabled}');
+      }
+    } else {
+      _logger.i('Audio stream cleared from renderer');
+    }
   }
 
   void dispose() {

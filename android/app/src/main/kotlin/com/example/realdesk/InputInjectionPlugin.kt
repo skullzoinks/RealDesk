@@ -11,6 +11,8 @@ import android.view.ViewConfiguration
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import com.google.protobuf.InvalidProtocolBufferException
+import remote.proto.RemoteInputProto
 
 /**
  * Plugin for injecting input events received from remote controller
@@ -42,6 +44,19 @@ class InputInjectionPlugin(private val activity: Activity) : MethodChannel.Metho
         when (call.method) {
             "initialize" -> {
                 result.success(true)
+            }
+            "injectInputMessage" -> {
+                // New method that accepts both JSON map or binary protobuf bytes
+                val data = call.argument<ByteArray>("data")
+                val isProtobuf = call.argument<Boolean>("isProtobuf") ?: false
+                
+                if (data != null && isProtobuf) {
+                    injectProtobufMessage(data)
+                } else {
+                    // Fallback to individual methods for JSON
+                    result.notImplemented()
+                }
+                result.success(null)
             }
             "injectMouseAbs" -> {
                 val x = call.argument<Double>("x") ?: 0.0
@@ -87,6 +102,46 @@ class InputInjectionPlugin(private val activity: Activity) : MethodChannel.Metho
             else -> {
                 result.notImplemented()
             }
+        }
+    }
+
+    private fun injectProtobufMessage(data: ByteArray) {
+        try {
+            val envelope = RemoteInputProto.Envelope.parseFrom(data)
+            
+            when (envelope.payloadCase) {
+                RemoteInputProto.Envelope.PayloadCase.KEYBOARD -> {
+                    val kb = envelope.keyboard
+                    injectKeyboard(kb.key, kb.code, kb.down, kb.mods)
+                }
+                RemoteInputProto.Envelope.PayloadCase.MOUSEABS -> {
+                    val m = envelope.mouseAbs
+                    injectMouseAbsolute(
+                        m.x.toDouble(), 
+                        m.y.toDouble(),
+                        m.displayW,
+                        m.displayH,
+                        m.btns.bits
+                    )
+                }
+                RemoteInputProto.Envelope.PayloadCase.MOUSEREL -> {
+                    val m = envelope.mouseRel
+                    injectMouseRelative(
+                        m.dx.toDouble(),
+                        m.dy.toDouble(),
+                        m.btns.bits
+                    )
+                }
+                RemoteInputProto.Envelope.PayloadCase.MOUSEWHEEL -> {
+                    val m = envelope.mouseWheel
+                    injectMouseWheel(m.dx.toDouble(), m.dy.toDouble())
+                }
+                else -> {
+                    android.util.Log.d(TAG, "Unhandled protobuf message type: ${envelope.payloadCase}")
+                }
+            }
+        } catch (e: InvalidProtocolBufferException) {
+            android.util.Log.e(TAG, "Failed to parse protobuf message", e)
         }
     }
 
@@ -230,20 +285,59 @@ class InputInjectionPlugin(private val activity: Activity) : MethodChannel.Metho
             32 -> KeyEvent.KEYCODE_SPACE
             8 -> KeyEvent.KEYCODE_DEL
             27 -> KeyEvent.KEYCODE_ESCAPE
-            1073741906 -> KeyEvent.KEYCODE_DPAD_UP
-            1073741905 -> KeyEvent.KEYCODE_DPAD_DOWN
-            1073741904 -> KeyEvent.KEYCODE_DPAD_LEFT
-            1073741903 -> KeyEvent.KEYCODE_DPAD_RIGHT
+            127 -> KeyEvent.KEYCODE_FORWARD_DEL
+            1073741881 -> KeyEvent.KEYCODE_CAPS_LOCK
+            1073741882 -> KeyEvent.KEYCODE_F1
+            1073741883 -> KeyEvent.KEYCODE_F2
+            1073741884 -> KeyEvent.KEYCODE_F3
+            1073741885 -> KeyEvent.KEYCODE_F4
+            1073741886 -> KeyEvent.KEYCODE_F5
+            1073741887 -> KeyEvent.KEYCODE_F6
+            1073741888 -> KeyEvent.KEYCODE_F7
+            1073741889 -> KeyEvent.KEYCODE_F8
+            1073741890 -> KeyEvent.KEYCODE_F9
+            1073741891 -> KeyEvent.KEYCODE_F10
+            1073741892 -> KeyEvent.KEYCODE_F11
+            1073741893 -> KeyEvent.KEYCODE_F12
+            1073741894 -> KeyEvent.KEYCODE_SYSRQ
+            1073741895 -> KeyEvent.KEYCODE_SCROLL_LOCK
+            1073741896 -> KeyEvent.KEYCODE_BREAK
+            1073741897 -> KeyEvent.KEYCODE_INSERT
             1073741898 -> KeyEvent.KEYCODE_MOVE_HOME
-            1073741901 -> KeyEvent.KEYCODE_MOVE_END
             1073741899 -> KeyEvent.KEYCODE_PAGE_UP
             1073741900 -> KeyEvent.KEYCODE_PAGE_DOWN
-            127 -> KeyEvent.KEYCODE_FORWARD_DEL
-            1073741897 -> KeyEvent.KEYCODE_INSERT
-            1073742049, 1073742053 -> KeyEvent.KEYCODE_SHIFT_LEFT
-            1073742048, 1073742052 -> KeyEvent.KEYCODE_CTRL_LEFT
-            1073742050, 1073742054 -> KeyEvent.KEYCODE_ALT_LEFT
-            1073742051, 1073742055 -> KeyEvent.KEYCODE_META_LEFT
+            1073741901 -> KeyEvent.KEYCODE_MOVE_END
+            1073741903 -> KeyEvent.KEYCODE_DPAD_RIGHT
+            1073741904 -> KeyEvent.KEYCODE_DPAD_LEFT
+            1073741905 -> KeyEvent.KEYCODE_DPAD_DOWN
+            1073741906 -> KeyEvent.KEYCODE_DPAD_UP
+            1073741907 -> KeyEvent.KEYCODE_NUM_LOCK
+            1073741908 -> KeyEvent.KEYCODE_NUMPAD_DIVIDE
+            1073741909 -> KeyEvent.KEYCODE_NUMPAD_MULTIPLY
+            1073741910 -> KeyEvent.KEYCODE_NUMPAD_SUBTRACT
+            1073741911 -> KeyEvent.KEYCODE_NUMPAD_ADD
+            1073741912 -> KeyEvent.KEYCODE_NUMPAD_ENTER
+            1073741913 -> KeyEvent.KEYCODE_NUMPAD_1
+            1073741914 -> KeyEvent.KEYCODE_NUMPAD_2
+            1073741915 -> KeyEvent.KEYCODE_NUMPAD_3
+            1073741916 -> KeyEvent.KEYCODE_NUMPAD_4
+            1073741917 -> KeyEvent.KEYCODE_NUMPAD_5
+            1073741918 -> KeyEvent.KEYCODE_NUMPAD_6
+            1073741919 -> KeyEvent.KEYCODE_NUMPAD_7
+            1073741920 -> KeyEvent.KEYCODE_NUMPAD_8
+            1073741921 -> KeyEvent.KEYCODE_NUMPAD_9
+            1073741922 -> KeyEvent.KEYCODE_NUMPAD_0
+            1073741923 -> KeyEvent.KEYCODE_NUMPAD_DOT
+            1073741927 -> KeyEvent.KEYCODE_NUMPAD_EQUALS
+            1073741957 -> KeyEvent.KEYCODE_NUMPAD_COMMA
+            1073742048 -> KeyEvent.KEYCODE_CTRL_LEFT
+            1073742052 -> KeyEvent.KEYCODE_CTRL_RIGHT
+            1073742049 -> KeyEvent.KEYCODE_SHIFT_LEFT
+            1073742053 -> KeyEvent.KEYCODE_SHIFT_RIGHT
+            1073742050 -> KeyEvent.KEYCODE_ALT_LEFT
+            1073742054 -> KeyEvent.KEYCODE_ALT_RIGHT
+            1073742051 -> KeyEvent.KEYCODE_META_LEFT
+            1073742055 -> KeyEvent.KEYCODE_META_RIGHT
             else -> {
                 // Try to map single character keys
                 if (key.length == 1) {

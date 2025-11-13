@@ -29,6 +29,7 @@ class PeerManager {
   RTCDataChannel? _dataChannelRt;
   RTCDataChannel? _dataChannelReliable;
   MediaStream? _localStream;
+  MediaStream? _remoteStream;
   final List<RTCRtpSender> _localSenders = [];
   bool _audioReceiverProvisioned = false;
   bool _isClosed = false;
@@ -289,20 +290,55 @@ class PeerManager {
   void _onTrack(RTCTrackEvent event) async {
     _logger.i('Received track: ${event.track.kind}');
 
-    MediaStream? stream;
+    // Use the stream from the event if available, otherwise create/use our accumulated stream
     if (event.streams.isNotEmpty) {
-      stream = event.streams.first;
-    } else {
-      try {
-        stream = await createLocalMediaStream('remote-${event.track.id}');
-        await stream.addTrack(event.track);
-      } catch (e) {
-        _logger.w('Failed to create fallback stream: $e');
-      }
-    }
+      final incomingStream = event.streams.first;
 
-    if (stream != null && _canAddTo(_remoteStreamController)) {
-      _remoteStreamController.add(stream);
+      // If we don't have a remote stream yet, use this one
+      if (_remoteStream == null) {
+        _remoteStream = incomingStream;
+        if (_canAddTo(_remoteStreamController)) {
+          _remoteStreamController.add(_remoteStream!);
+        }
+      } else if (_remoteStream!.id != incomingStream.id) {
+        // Different stream, add the new track to our existing stream
+        try {
+          await _remoteStream!.addTrack(event.track);
+          _logger
+              .i('Added ${event.track.kind} track to existing remote stream');
+          // Emit the updated stream
+          if (_canAddTo(_remoteStreamController)) {
+            _remoteStreamController.add(_remoteStream!);
+          }
+        } catch (e) {
+          _logger.w('Failed to add track to existing stream: $e');
+        }
+      } else {
+        // Same stream, track already added, just emit it
+        if (_canAddTo(_remoteStreamController)) {
+          _remoteStreamController.add(_remoteStream!);
+        }
+      }
+    } else {
+      // No stream provided, create one and accumulate tracks
+      if (_remoteStream == null) {
+        try {
+          _remoteStream = await createLocalMediaStream('remote-stream');
+        } catch (e) {
+          _logger.e('Failed to create remote stream: $e');
+          return;
+        }
+      }
+
+      try {
+        await _remoteStream!.addTrack(event.track);
+        _logger.i('Added ${event.track.kind} track to remote stream');
+        if (_canAddTo(_remoteStreamController)) {
+          _remoteStreamController.add(_remoteStream!);
+        }
+      } catch (e) {
+        _logger.w('Failed to add track to stream: $e');
+      }
     }
   }
 
@@ -380,6 +416,7 @@ class PeerManager {
     await _removeLocalSenders();
     await _peerConnection?.close();
     _peerConnection = null;
+    _remoteStream = null;
     _audioReceiverProvisioned = false;
   }
 

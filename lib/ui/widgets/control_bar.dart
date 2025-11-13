@@ -274,6 +274,19 @@ class ControlBar extends StatelessWidget {
         constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
         padding: const EdgeInsets.all(2),
       ),
+      // Audio toggle for landscape mode
+      if (onToggleAudio != null)
+        IconButton(
+          icon: Icon(
+            (audioEnabled ?? true) ? Icons.volume_up : Icons.volume_off,
+            color: Colors.white,
+            size: 18,
+          ),
+          tooltip: (audioEnabled ?? true) ? '关闭音频' : '开启音频',
+          onPressed: onToggleAudio,
+          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+          padding: const EdgeInsets.all(2),
+        ),
     ];
   }
 }

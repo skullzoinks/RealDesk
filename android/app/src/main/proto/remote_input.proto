@@ -1,0 +1,88 @@
+// Description: Remote input protocol (Proto3), recommended to compile with protobuf-lite
+syntax = "proto3";
+
+package remote.proto;
+
+option optimize_for = LITE_RUNTIME;
+
+message Buttons {
+  uint32 bits = 1; // Mouse/gamepad button mask
+}
+
+message Keyboard {
+  string key = 1;  // Human-readable key name (optional)
+  int32 code = 2;  // Platform scan code or unified code
+  bool down = 3;   // Pressed/released
+  uint32 mods = 4; // Modifier key mask
+}
+
+message MouseAbs {
+  float x = 1;        // Absolute pixel coordinate X on the receiving side
+  float y = 2;        // Absolute pixel coordinate Y on the receiving side
+  Buttons btns = 3;   // Button position
+  int32 displayW = 4; // Display/capture width on the receiving side
+  int32 displayH = 5; // Display/capture height on the receiving side
+}
+
+message MouseRel {
+  float dx = 1;
+  float dy = 2;
+  Buttons btns = 3;
+  int32 rateHz = 4;
+}
+
+message MouseWheel {
+  float dx = 1;
+  float dy = 2;
+}
+
+message CursorImage {
+  int32 w = 1;
+  int32 h = 2;
+  int32 hotspotX = 3;
+  int32 hotspotY = 4;
+  bool visible = 5;
+  bytes rgba = 6; // RGBA layout
+}
+
+message ImeState {
+  bool open = 1;
+  string lang = 2; // e.g. zh-CN, en-US, ja-JP
+}
+
+message GamepadXInput {
+  uint32 buttonsMask = 1; // XUSB wButtons mask 
+  float lx = 2;
+  float ly = 3;
+  float rx = 4;
+  float ry = 5;
+  float lt = 6;
+  float rt = 7;
+  int32 index = 8; // Controller index on the receiving side (0-based)
+}
+
+message GamepadConnection {
+  int32 index = 1;
+  bool connected = 2;
+}
+
+message GamepadFeedback {
+  int32 index = 1;        // Controller index that should receive the feedback
+  float largeMotor = 2;   // Normalized low-frequency motor strength (0.0-1.0)
+  float smallMotor = 3;   // Normalized high-frequency motor strength (0.0-1.0)
+  int32 ledCode = 4;      // XInput LED pattern identifier (0-15)
+}
+
+message Envelope {
+  oneof payload {
+    Keyboard keyboard = 1;
+    MouseAbs mouseAbs = 2;
+    MouseRel mouseRel = 3;
+    MouseWheel mouseWheel = 4;
+    CursorImage cursorImage = 5;
+    ImeState imeState = 6;
+    GamepadXInput gamepadXInput = 7;
+    GamepadConnection gamepadConnection = 8;
+    GamepadFeedback gamepadFeedback = 9;
+  }
+}

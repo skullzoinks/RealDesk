@@ -28,6 +28,7 @@ class RealDeskSettings {
     this.preferredVideoCodec = 'H264',
     this.enableAudio = true,
     this.audioVolume = 1.0,
+    this.useProtobuf = false,
   });
 
   bool insecure;
@@ -42,6 +43,7 @@ class RealDeskSettings {
   String preferredVideoCodec;
   bool enableAudio;
   double audioVolume; // 0.0 to 1.0
+  bool useProtobuf; // Use Protobuf protocol instead of JSON
 
   Map<String, dynamic> toMap() => {
         'insecure': insecure,
@@ -56,6 +58,7 @@ class RealDeskSettings {
         'preferredVideoCodec': preferredVideoCodec,
         'enableAudio': enableAudio,
         'audioVolume': audioVolume,
+        'useProtobuf': useProtobuf,
       };
 
   static RealDeskSettings fromMap(Map<String, dynamic> m) {
@@ -75,6 +78,7 @@ class RealDeskSettings {
           (m['preferredVideoCodec'] as String?)?.toUpperCase() ?? 'H264',
       enableAudio: m['enableAudio'] ?? true,
       audioVolume: (m['audioVolume'] as num?)?.toDouble() ?? 1.0,
+      useProtobuf: m['useProtobuf'] ?? false,
     );
   }
 }

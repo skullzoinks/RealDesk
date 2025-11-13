@@ -18,11 +18,8 @@ class StatsCollector {
 
   Timer? _collectTimer;
   QoSMetrics _lastMetrics = const QoSMetrics();
-  int _lastBytesReceived = 0;
-  int _lastFramesReceived = 0;
-  int _lastTimestamp = 0;
-  int _lastAudioBytesReceived = 0;
-  int _lastAudioTimestamp = 0;
+  final Map<String, _VideoStreamSample> _lastVideoSamples = {};
+  final Map<String, _AudioStreamSample> _lastAudioSamples = {};
 
   final _metricsController = StreamController<QoSMetrics>.broadcast();
   Stream<QoSMetrics> get metricsStream => _metricsController.stream;
@@ -35,6 +32,9 @@ class StatsCollector {
       return;
     }
 
+    _lastVideoSamples.clear();
+    _lastAudioSamples.clear();
+    _lastMetrics = const QoSMetrics();
     _logger.i('Starting stats collection');
     _collectTimer = Timer.periodic(collectInterval, (_) {
       _collectStats();
@@ -45,6 +45,8 @@ class StatsCollector {
   void stop() {
     _collectTimer?.cancel();
     _collectTimer = null;
+    _lastVideoSamples.clear();
+    _lastAudioSamples.clear();
     _logger.i('Stopped stats collection');
   }
 
@@ -68,74 +70,146 @@ class StatsCollector {
     int rtt = 0;
     double jitter = 0.0;
     double packetLoss = 0.0;
-    int framesReceived = 0;
-    int framesDropped = 0;
+    int framesReceivedMetric = 0;
+    int framesDroppedMetric = 0;
+
+    double fpsMetricSum = 0.0;
+    int fpsMetricCount = 0;
+    double frameDiffSum = 0.0;
+    double frameTimeSum = 0.0;
+    double videoBitrateSum = 0.0;
+    double audioBitrateSum = 0.0;
+    int totalPacketsLost = 0;
+    int totalPackets = 0;
+    double maxVideoJitter = 0.0;
 
     for (final report in stats) {
       final values = report.values;
-      final type = report.type.toString();
+      final reportType = report.type.toString();
 
-      switch (type) {
-        case 'inbound-rtp':
-          final mediaType = (values['mediaType'] ?? values['kind'])?.toString();
+      if (reportType == 'inbound-rtp') {
+        final mediaType = (values['mediaType'] ?? values['kind'])?.toString();
+        final streamId = report.id;
+        if (streamId.isEmpty) {
+          continue;
+        }
 
-          if (mediaType == 'video') {
-            final currentTimestamp = (report.timestamp as num?)?.toInt() ?? 0;
+        final currentTimestampMs =
+            (report.timestamp as num?)?.toDouble() ?? 0.0;
+        final bytesReceived = _parseInt(values['bytesReceived']);
 
-            framesReceived = _parseInt(values['framesReceived']);
-            framesDropped = _parseInt(values['framesDropped']);
-            final bytesReceived = _parseInt(values['bytesReceived']);
+        if (mediaType == 'video') {
+          final framesReceivedCurrent = _parseInt(values['framesReceived']);
+          final framesDroppedCurrent = _parseInt(values['framesDropped']);
+          if (framesReceivedCurrent > framesReceivedMetric) {
+            framesReceivedMetric = framesReceivedCurrent;
+          }
+          if (framesDroppedCurrent > framesDroppedMetric) {
+            framesDroppedMetric = framesDroppedCurrent;
+          }
 
-            if (_lastTimestamp > 0 && currentTimestamp > _lastTimestamp) {
-              final timeDiffSeconds =
-                  (currentTimestamp - _lastTimestamp) / 1000.0;
-              if (timeDiffSeconds > 0) {
-                final framesDiff = framesReceived - _lastFramesReceived;
-                fps = framesDiff / timeDiffSeconds;
+          final framesPerSecond = _parseDouble(values['framesPerSecond']);
+          if (framesPerSecond > 0) {
+            fpsMetricSum += framesPerSecond;
+            fpsMetricCount++;
+          }
 
-                final bytesDiff = bytesReceived - _lastBytesReceived;
-                videoBitrate = ((bytesDiff * 8) / timeDiffSeconds).round();
+          final previous = _lastVideoSamples[streamId];
+          final intervalSeconds = previous == null
+              ? null
+              : _resolveIntervalSeconds(
+                  currentTimestampMs,
+                  previous.timestampMs,
+                );
+
+          if (previous != null && intervalSeconds != null && intervalSeconds > 0) {
+            final bytesDiff = bytesReceived - previous.bytesReceived;
+            if (bytesDiff >= 0) {
+              videoBitrateSum += (bytesDiff * 8) / intervalSeconds;
+            }
+
+            if (framesPerSecond <= 0) {
+              final framesDiff =
+                  framesReceivedCurrent - previous.framesReceived;
+              if (framesDiff >= 0) {
+                frameDiffSum += framesDiff;
+                frameTimeSum += intervalSeconds;
               }
             }
-            _lastTimestamp = currentTimestamp;
-            _lastFramesReceived = framesReceived;
-            _lastBytesReceived = bytesReceived;
-
-            jitter = _parseDouble(values['jitter']) * 1000; // seconds -> ms
-
-            final packetsLost = _parseInt(values['packetsLost']);
-            final packetsReceived = _parseInt(values['packetsReceived']);
-            final totalPackets = packetsReceived + packetsLost;
-            if (totalPackets > 0) {
-              packetLoss = (packetsLost / totalPackets) * 100;
-            }
-          } else if (mediaType == 'audio') {
-            final currentTimestamp = (report.timestamp as num?)?.toInt() ?? 0;
-            final bytesReceived = _parseInt(values['bytesReceived']);
-            if (_lastAudioTimestamp > 0 &&
-                currentTimestamp > _lastAudioTimestamp) {
-              final timeDiffSeconds =
-                  (currentTimestamp - _lastAudioTimestamp) / 1000.0;
-              if (timeDiffSeconds > 0) {
-                final bytesDiff = bytesReceived - _lastAudioBytesReceived;
-                audioBitrate = ((bytesDiff * 8) / timeDiffSeconds).round();
-              }
-            }
-            _lastAudioTimestamp = currentTimestamp;
-            _lastAudioBytesReceived = bytesReceived;
           }
-          break;
 
-        case 'candidate-pair':
-          final state = values['state'] as String?;
-          if (state == 'succeeded') {
-            rtt = (_parseDouble(values['currentRoundTripTime']) * 1000).round();
+          final jitterMs = _parseDouble(values['jitter']) * 1000;
+          if (jitterMs > maxVideoJitter) {
+            maxVideoJitter = jitterMs;
           }
-          break;
 
-        default:
-          break;
+          final packetsLost = _parseInt(values['packetsLost']);
+          final packetsReceivedCount = _parseInt(values['packetsReceived']);
+          totalPacketsLost += packetsLost;
+          totalPackets += packetsLost + packetsReceivedCount;
+
+          _lastVideoSamples[streamId] = _VideoStreamSample(
+            bytesReceived: bytesReceived,
+            framesReceived: framesReceivedCurrent,
+            timestampMs: currentTimestampMs,
+          );
+        } else if (mediaType == 'audio') {
+          final previous = _lastAudioSamples[streamId];
+          final intervalSeconds = previous == null
+              ? null
+              : _resolveIntervalSeconds(
+                  currentTimestampMs,
+                  previous.timestampMs,
+                );
+
+          if (previous != null &&
+              intervalSeconds != null &&
+              intervalSeconds > 0) {
+            final bytesDiff = bytesReceived - previous.bytesReceived;
+            if (bytesDiff >= 0) {
+              audioBitrateSum += (bytesDiff * 8) / intervalSeconds;
+            }
+          }
+
+          _lastAudioSamples[streamId] = _AudioStreamSample(
+            bytesReceived: bytesReceived,
+            timestampMs: currentTimestampMs,
+          );
+        }
+      } else if (reportType == 'candidate-pair') {
+        final state = values['state'] as String?;
+        if (state == 'succeeded') {
+          rtt = (_parseDouble(values['currentRoundTripTime']) * 1000).round();
+        }
       }
+    }
+
+    if (fpsMetricCount > 0) {
+      fps = fpsMetricSum / fpsMetricCount;
+    } else if (frameTimeSum > 0) {
+      fps = frameDiffSum / frameTimeSum;
+    } else if (_lastMetrics.fps > 0) {
+      fps = _lastMetrics.fps;
+    }
+
+    if (videoBitrateSum > 0) {
+      videoBitrate = videoBitrateSum.round();
+    } else if (_lastMetrics.videoBitrate > 0) {
+      videoBitrate = _lastMetrics.videoBitrate;
+    }
+
+    if (audioBitrateSum > 0) {
+      audioBitrate = audioBitrateSum.round();
+    } else if (_lastMetrics.audioBitrate > 0) {
+      audioBitrate = _lastMetrics.audioBitrate;
+    }
+
+    if (maxVideoJitter > 0) {
+      jitter = maxVideoJitter;
+    }
+
+    if (totalPackets > 0) {
+      packetLoss = (totalPacketsLost / totalPackets) * 100;
     }
 
     return QoSMetrics(
@@ -145,8 +219,8 @@ class StatsCollector {
       rtt: rtt,
       jitter: jitter,
       packetLoss: packetLoss,
-      framesReceived: framesReceived,
-      framesDropped: framesDropped,
+      framesReceived: framesReceivedMetric,
+      framesDropped: framesDroppedMetric,
     );
   }
 
@@ -166,9 +240,46 @@ class StatsCollector {
     return 0.0;
   }
 
+  /// Convert timestamp delta (which may be reported in ms or µs) to seconds.
+  double? _resolveIntervalSeconds(double current, double last) {
+    final diff = current - last;
+    if (diff <= 0) {
+      return null;
+    }
+
+    var seconds = diff / 1000.0;
+    if (seconds > 5) {
+      seconds = diff / 1000000.0;
+    }
+
+    return seconds > 0 ? seconds : null;
+  }
+
   /// Dispose resources
   void dispose() {
     stop();
     _metricsController.close();
   }
+}
+
+class _VideoStreamSample {
+  const _VideoStreamSample({
+    required this.bytesReceived,
+    required this.framesReceived,
+    required this.timestampMs,
+  });
+
+  final int bytesReceived;
+  final int framesReceived;
+  final double timestampMs;
+}
+
+class _AudioStreamSample {
+  const _AudioStreamSample({
+    required this.bytesReceived,
+    required this.timestampMs,
+  });
+
+  final int bytesReceived;
+  final double timestampMs;
 }

@@ -24,7 +24,7 @@ class MetricsOverlay extends StatelessWidget {
         return Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.8),
+            color: Colors.black.withOpacity(0.35),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: _getQualityColor(quality),

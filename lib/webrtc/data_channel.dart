@@ -1,31 +1,39 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:logger/logger.dart';
 
-/// Data channel manager for sending input events
+import '../input/schema/remote_input.pb.dart' as pb;
+
+/// Data channel manager for sending input events that match the
+/// remotecontrol `remote/proto/serializer.h` JSON schema.
 class DataChannelManager {
   DataChannelManager({
     required RTCDataChannel? rtChannel,
     required RTCDataChannel? reliableChannel,
+    bool useProtobuf = false,
   })  : _rt = rtChannel,
         _reliable = reliableChannel,
+        _useProtobuf = useProtobuf,
         _logger = Logger();
 
   final RTCDataChannel? _rt;
   final RTCDataChannel? _reliable;
+  final bool _useProtobuf;
   final Logger _logger;
 
-  static const int protoVersion = 1;
-
-  RTCDataChannel? _choose(bool reliable) {
-    if (reliable) {
+  RTCDataChannel? _choose(bool reliablePreferred) {
+    if (reliablePreferred) {
       return _reliable ?? _rt;
     }
     return _rt ?? _reliable;
   }
 
-  void _sendJson(Map<String, dynamic> msg, {bool reliable = false}) {
+  void _sendJson(
+    Map<String, dynamic> msg, {
+    bool reliable = false,
+  }) {
     final ch = _choose(reliable);
     if (ch == null) {
       _logger.w('DataChannel not available (reliable=$reliable)');
@@ -36,16 +44,39 @@ class DataChannelManager {
       return;
     }
     try {
-      final jsonString = jsonEncode(msg);
-      ch.send(RTCDataChannelMessage(jsonString));
-      _logger.d('DC(${ch.label}) <- ${msg['type']}');
-    } catch (e) {
-      _logger.e('Failed to send: $e');
+      ch.send(RTCDataChannelMessage(jsonEncode(msg)));
+      _logger.d('DC(${ch.label}) <- ${msg['type']} [JSON]');
+    } catch (e, stackTrace) {
+      _logger.e('Failed to send data channel message',
+          error: e, stackTrace: stackTrace);
+    }
+  }
+
+  void _sendProtobuf(
+    pb.Envelope envelope, {
+    bool reliable = false,
+  }) {
+    final ch = _choose(reliable);
+    if (ch == null) {
+      _logger.w('DataChannel not available (reliable=$reliable)');
+      return;
+    }
+    if (ch.state != RTCDataChannelState.RTCDataChannelOpen) {
+      _logger.w('DataChannel not open (label=${ch.label}, state=${ch.state})');
+      return;
+    }
+    try {
+      final bytes = envelope.writeToBuffer();
+      ch.send(RTCDataChannelMessage.fromBinary(Uint8List.fromList(bytes)));
+      _logger.d('DC(${ch.label}) <- ${envelope.whichPayload()} [Protobuf]');
+    } catch (e, stackTrace) {
+      _logger.e('Failed to send protobuf message',
+          error: e, stackTrace: stackTrace);
     }
   }
 
   // --- Helpers (mask, timestamp) ---
-  int _buttonsMaskFromList(List<String>? buttons) {
+  int _buttonsMaskFromList(Iterable<String>? buttons) {
     if (buttons == null) return 0;
     int mask = 0;
     for (final b in buttons) {
@@ -88,68 +119,158 @@ class DataChannelManager {
     return mask;
   }
 
-  // --- Event senders (flat JSON expected by receiver) ---
+  // --- Event senders matching remotecontrol schema ---
 
   void sendMouseAbs({
     required double x,
     required double y,
     required int displayW,
     required int displayH,
-    List<String>? buttons,
+    Iterable<String>? buttons,
   }) {
-    _sendJson({
-      'type': 'mouseAbs',
-      'x': x,
-      'y': y,
-      'displayW': displayW,
-      'displayH': displayH,
-      'buttons': _buttonsMaskFromList(buttons),
-      'ts': DateTime.now().millisecondsSinceEpoch,
-      'protoVersion': protoVersion,
-    });
+    if (_useProtobuf) {
+      final envelope = pb.Envelope()
+        ..mouseAbs = (pb.MouseAbs()
+          ..x = x
+          ..y = y
+          ..btns = (pb.Buttons()..bits = _buttonsMaskFromList(buttons))
+          ..displayW = displayW
+          ..displayH = displayH);
+      _sendProtobuf(envelope, reliable: true);
+    } else {
+      _sendJson(
+        {
+          'type': 'mouseAbs',
+          'x': x,
+          'y': y,
+          'buttons': _buttonsMaskFromList(buttons),
+          'displayW': displayW,
+          'displayH': displayH,
+        },
+        reliable: true,
+      );
+    }
   }
 
   void sendMouseRel({
     required double dx,
     required double dy,
-    List<String>? buttons,
+    Iterable<String>? buttons,
+    int rateHz = 0,
   }) {
-    _sendJson({
-      'type': 'mouseRel',
-      'dx': dx,
-      'dy': dy,
-      'buttons': _buttonsMaskFromList(buttons),
-      'ts': DateTime.now().millisecondsSinceEpoch,
-      'protoVersion': protoVersion,
-    });
+    if (_useProtobuf) {
+      final envelope = pb.Envelope()
+        ..mouseRel = (pb.MouseRel()
+          ..dx = dx
+          ..dy = dy
+          ..btns = (pb.Buttons()..bits = _buttonsMaskFromList(buttons))
+          ..rateHz = rateHz);
+      _sendProtobuf(envelope);
+    } else {
+      _sendJson(
+        {
+          'type': 'mouseRel',
+          'dx': dx,
+          'dy': dy,
+          'buttons': _buttonsMaskFromList(buttons),
+          'rateHz': rateHz,
+        },
+      );
+    }
   }
 
-  void sendWheel({required double dx, required double dy}) {
-    _sendJson({
-      'type': 'mouseWheel',
-      'dx': dx,
-      'dy': dy,
-      'ts': DateTime.now().millisecondsSinceEpoch,
-      'protoVersion': protoVersion,
-    });
+  void sendWheel({
+    required double dx,
+    required double dy,
+  }) {
+    if (_useProtobuf) {
+      final envelope = pb.Envelope()
+        ..mouseWheel = (pb.MouseWheel()
+          ..dx = dx
+          ..dy = dy);
+      _sendProtobuf(envelope, reliable: true);
+    } else {
+      _sendJson(
+        {
+          'type': 'mouseWheel',
+          'dx': dx,
+          'dy': dy,
+        },
+        reliable: true,
+      );
+    }
   }
 
   void sendTouchEvent({required List<Map<String, dynamic>> touches}) {
-    _sendJson({
-      'type': 'touch',
-      'touches': touches,
-      'ts': DateTime.now().millisecondsSinceEpoch,
-      'protoVersion': protoVersion,
-    });
+    // Note: Touch events are not yet defined in the protobuf schema,
+    // so we always use JSON for now
+    _sendJson(
+      {
+        'type': 'touch',
+        'touches': touches,
+      },
+    );
   }
 
-  void sendGamepadEvent({required Map<String, dynamic> gamepadEvent}) {
-    _sendJson({
-      'type': 'gamepad',
-      'event': gamepadEvent,
-      'ts': DateTime.now().millisecondsSinceEpoch,
-      'protoVersion': protoVersion,
-    });
+  void sendGamepadState({
+    required int index,
+    required int buttonsMask,
+    required double lx,
+    required double ly,
+    required double rx,
+    required double ry,
+    required double lt,
+    required double rt,
+  }) {
+    if (_useProtobuf) {
+      final envelope = pb.Envelope()
+        ..gamepadXInput = (pb.GamepadXInput()
+          ..index = index
+          ..buttonsMask = buttonsMask
+          ..lx = lx
+          ..ly = ly
+          ..rx = rx
+          ..ry = ry
+          ..lt = lt
+          ..rt = rt);
+      _sendProtobuf(envelope);
+    } else {
+      _sendJson(
+        {
+          'type': 'gamepadXInput',
+          'buttonsMask': buttonsMask,
+          'lx': lx,
+          'ly': ly,
+          'rx': rx,
+          'ry': ry,
+          'lt': lt,
+          'rt': rt,
+          'index': index,
+        },
+      );
+    }
+  }
+
+  void sendGamepadConnection({
+    required int index,
+    required bool connected,
+  }) {
+    if (_useProtobuf) {
+      final envelope = pb.Envelope()
+        ..gamepadConnection = (pb.GamepadConnection()
+          ..index = index
+          ..connected = connected);
+      _sendProtobuf(envelope, reliable: true);
+    } else {
+      _sendJson(
+        {
+          'type': 'gamepadConnection',
+          'index': index,
+          'connected': connected,
+        },
+        reliable: true,
+      );
+    }
   }
 
   void sendKeyboard({
@@ -158,25 +279,37 @@ class DataChannelManager {
     int code = 0,
     Map<String, bool>? meta,
   }) {
-    _sendJson({
-      'type': 'keyboard',
-      'key': key,
-      'code': code,
-      'down': down,
-      'mods': _modsMask(meta),
-      'ts': DateTime.now().millisecondsSinceEpoch,
-      'protoVersion': protoVersion,
-    }, reliable: true);
+    if (_useProtobuf) {
+      final envelope = pb.Envelope()
+        ..keyboard = (pb.Keyboard()
+          ..key = key
+          ..code = code
+          ..down = down
+          ..mods = _modsMask(meta));
+      _sendProtobuf(envelope, reliable: true);
+    } else {
+      _sendJson(
+        {
+          'type': 'keyboard',
+          'key': key,
+          'code': code,
+          'down': down,
+          'mods': _modsMask(meta),
+        },
+        reliable: true,
+      );
+    }
   }
 
-  // System commands use reliable channel
+  // System commands (RealDesk-specific) always use JSON (not in protobuf schema)
   void sendSystemCommand(String action) {
-    _sendJson({
-      'type': 'system',
-      'action': action,
-      'ts': DateTime.now().millisecondsSinceEpoch,
-      'protoVersion': protoVersion,
-    }, reliable: true);
+    _sendJson(
+      {
+        'type': 'system',
+        'action': action,
+      },
+      reliable: true,
+    );
   }
 
   void toggleMouseMode() => sendSystemCommand('toggle-abs-rel');

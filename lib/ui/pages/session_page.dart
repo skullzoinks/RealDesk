@@ -228,6 +228,7 @@ class _SessionPageState extends State<SessionPage> {
     _dataChannelManager = DataChannelManager(
       rtChannel: _peerManager.rtChannel,
       reliableChannel: _peerManager.reliableChannel,
+      useProtobuf: _settings.useProtobuf,
     );
 
     // Initialize input controllers
@@ -389,15 +390,24 @@ class _SessionPageState extends State<SessionPage> {
     _logger.i(
         'Received remote stream with ${stream.getVideoTracks().length} video tracks and ${stream.getAudioTracks().length} audio tracks');
 
+    final previousStream = _remoteStream;
+    final isNewStream =
+        previousStream == null || previousStream.id != stream.id;
+
     setState(() {
       _remoteStream = stream;
     });
 
-    // Set up audio playback
-    _setupAudioPlayback(stream);
+    if (previousStream != null && previousStream.id != stream.id) {
+      AudioManager.instance.unregisterMediaStream(previousStream);
+    }
 
-    // Start stats collection
-    if (_peerManager.peerConnection != null) {
+    // Set up audio playback (always call to handle new tracks)
+    unawaited(_setupAudioPlayback(stream));
+
+    // Start stats collection only for new streams
+    if (isNewStream && _peerManager.peerConnection != null) {
+      _statsCollector?.dispose();
       _statsCollector = StatsCollector(
         peerConnection: _peerManager.peerConnection!,
       );
@@ -414,25 +424,46 @@ class _SessionPageState extends State<SessionPage> {
     });
   }
 
-  void _setupAudioPlayback(MediaStream stream) {
+  Future<void> _setupAudioPlayback(MediaStream stream) async {
     final audioTracks = stream.getAudioTracks();
-    if (audioTracks.isNotEmpty && _audioRenderer != null) {
-      _logger.i(
-          'Setting up audio playback for ${audioTracks.length} audio track(s)');
+    _logger.i(
+        'Setting up audio playback for ${audioTracks.length} audio track(s)');
 
-      // Configure audio tracks with current settings
-      AudioManager.instance.configureMediaStream(stream);
-
-      // Set stream to renderer
-      _audioRenderer!.setStream(stream);
-
-      _logger.i(
-          'Audio playback configured: ${AudioManager.instance.getAudioStatusDescription()}');
-    } else if (audioTracks.isEmpty) {
+    if (audioTracks.isEmpty) {
       _logger.w('No audio tracks found in remote stream');
-    } else {
-      _logger.e('Audio renderer not initialized');
+      return;
     }
+
+    if (_audioRenderer == null) {
+      _logger.e('Audio renderer not initialized');
+      return;
+    }
+
+    // Log audio track details before configuration
+    for (var track in audioTracks) {
+      _logger.i(
+          'Audio track BEFORE config: id=${track.id}, kind=${track.kind}, enabled=${track.enabled}, muted=${track.muted}');
+    }
+
+    // First, set stream to renderer so platform can see the stream
+    _audioRenderer!.setStream(stream);
+
+    // Then configure audio tracks with current settings
+    try {
+      await AudioManager.instance.configureMediaStream(stream);
+      _logger.i('Audio manager configuration completed');
+    } catch (e) {
+      _logger.e('Failed to configure audio manager: $e');
+    }
+
+    // Log audio track details after configuration
+    for (var track in audioTracks) {
+      _logger.i(
+          'Audio track AFTER config: id=${track.id}, kind=${track.kind}, enabled=${track.enabled}, muted=${track.muted}');
+    }
+
+    _logger.i(
+        'Audio playback configured: ${AudioManager.instance.getAudioStatusDescription()}');
   }
 
   void _onIceCandidate(RTCIceCandidate candidate) {
@@ -505,6 +536,9 @@ class _SessionPageState extends State<SessionPage> {
         break;
       case 'touch':
         _handleTouchMessage(payload);
+        break;
+      case 'gamepadFeedback':
+        _handleGamepadFeedback(payload);
         break;
       default:
         _logger.d('Unknown data channel message type: $type');
@@ -597,6 +631,23 @@ class _SessionPageState extends State<SessionPage> {
     final touchList = touches.whereType<Map<String, dynamic>>().toList();
 
     _inputInjector?.injectTouch(touches: touchList);
+  }
+
+  void _handleGamepadFeedback(Map<String, dynamic> payload) {
+    final index = (payload['index'] as num?)?.toInt();
+    if (index == null) {
+      _logger.w('Invalid gamepadFeedback message: missing index');
+      return;
+    }
+    final large = (payload['largeMotor'] as num?)?.toDouble() ?? 0.0;
+    final small = (payload['smallMotor'] as num?)?.toDouble() ?? 0.0;
+    final ledCode = (payload['ledCode'] as num?)?.toInt() ?? -1;
+    _gamepadController?.handleFeedback(
+      index: index,
+      largeMotor: large,
+      smallMotor: small,
+      ledCode: ledCode,
+    );
   }
 
   void _handleCursorImageMessage(Map<String, dynamic> payload) {
@@ -769,7 +820,7 @@ class _SessionPageState extends State<SessionPage> {
 
     // 重新配置当前的音频流
     if (_remoteStream != null) {
-      AudioManager.instance.configureMediaStream(_remoteStream!);
+      await AudioManager.instance.configureMediaStream(_remoteStream!);
     }
 
     setState(() {
@@ -1018,6 +1069,7 @@ class _SessionPageState extends State<SessionPage> {
     _remoteCursorImage?.dispose();
     _statsCollector?.dispose();
     _gamepadController?.dispose();
+    AudioManager.instance.unregisterMediaStream(_remoteStream);
     _audioRenderer?.dispose();
     _inputInjector?.dispose();
     _focusNode.dispose();
@@ -1164,6 +1216,23 @@ class _SessionPageState extends State<SessionPage> {
                       onVideoSizeChanged: _handleVideoSizeChanged,
                     ),
                   ),
+                  // Audio renderer - MUST be visible on Windows for audio to play
+                  // Positioned in bottom-right corner, nearly transparent
+                  if (_audioRenderer != null && _remoteStream != null)
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      width: 1,
+                      height: 1,
+                      child: Container(
+                        color: Colors.transparent,
+                        child: RTCVideoView(
+                          _audioRenderer!.renderer,
+                          objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                          mirror: false,
+                        ),
+                      ),
+                    ),
                   if (_shouldShowRemoteCursor && _remoteCursorImage != null)
                     Positioned(
                       left: _pointerPosition.dx - _cursorHotspot.dx,

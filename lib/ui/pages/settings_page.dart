@@ -147,6 +147,12 @@ class _SettingsPageState extends State<SettingsPage> {
                   value: _s.defaultMouseRelative,
                   onChanged: (v) => setState(() => _s.defaultMouseRelative = v),
                 ),
+                SwitchListTile(
+                  title: const Text('使用 Protobuf 协议'),
+                  subtitle: const Text('更高性能，更小数据量（需重新连接生效）'),
+                  value: _s.useProtobuf,
+                  onChanged: (v) => setState(() => _s.useProtobuf = v),
+                ),
                 const SizedBox(height: 16),
                 const Divider(),
                 const SizedBox(height: 8),

@@ -2,6 +2,7 @@ import 'package:flutter/services.dart' as services;
 import 'package:logger/logger.dart';
 
 import '../webrtc/data_channel.dart';
+import 'key_mapping.dart';
 import 'schema/input_messages.dart';
 
 /// Keyboard input controller
@@ -29,8 +30,8 @@ class KeyboardController {
     _pressedKeys.add(event.logicalKey);
 
     final modifiers = _getModifiers();
-    final keyName = _deriveKeyName(event.logicalKey, event.character);
-    final code = _deriveKeyCode(event.logicalKey, keyName);
+    final keyName = KeyMapping.keyNameFor(event.logicalKey);
+    final code = KeyMapping.keyCodeFor(event.logicalKey);
 
     dataChannelManager.sendKeyboard(
       key: keyName,
@@ -52,8 +53,8 @@ class KeyboardController {
     _pressedKeys.remove(event.logicalKey);
 
     final modifiers = _getModifiers();
-    final keyName = _deriveKeyName(event.logicalKey, event.character);
-    final code = _deriveKeyCode(event.logicalKey, keyName);
+    final keyName = KeyMapping.keyNameFor(event.logicalKey);
+    final code = KeyMapping.keyCodeFor(event.logicalKey);
 
     dataChannelManager.sendKeyboard(
       key: keyName,
@@ -99,80 +100,4 @@ class KeyboardController {
     _pressedKeys.clear();
   }
 
-  String _deriveKeyName(
-    services.LogicalKeyboardKey logicalKey,
-    String? character,
-  ) {
-    if (character != null && character.isNotEmpty) {
-      return character;
-    }
-
-    final label = logicalKey.keyLabel;
-    if (label.isNotEmpty) {
-      return label;
-    }
-
-    final debugName = logicalKey.debugName ?? '';
-    if (debugName.isEmpty) {
-      return 'Unknown';
-    }
-
-    // Normalize common debug names ("Key A", "Digit 1", "Arrow Left")
-    if (debugName.startsWith('Key ')) {
-      return debugName.substring(4);
-    }
-    if (debugName.startsWith('Digit ')) {
-      return debugName.substring(6);
-    }
-    if (debugName.startsWith('Numpad ')) {
-      return debugName.substring(7);
-    }
-    if (debugName.startsWith('Arrow ')) {
-      return debugName.replaceAll(' ', '');
-    }
-    return debugName;
-  }
-
-  int _deriveKeyCode(services.LogicalKeyboardKey logicalKey, String keyName) {
-    // Map printable ASCII from normalized key name
-    if (keyName.length == 1) {
-      final intCode = keyName.toUpperCase().codeUnitAt(0);
-      if (intCode >= 32 && intCode <= 126) {
-        return intCode;
-      }
-    }
-
-    final mapping = <services.LogicalKeyboardKey, int>{
-      services.LogicalKeyboardKey.enter: 13, // SDLK_RETURN
-      services.LogicalKeyboardKey.tab: 9, // SDLK_TAB
-      services.LogicalKeyboardKey.space: 32, // SDLK_SPACE
-      services.LogicalKeyboardKey.backspace: 8, // SDLK_BACKSPACE
-      services.LogicalKeyboardKey.escape: 27, // SDLK_ESCAPE
-      services.LogicalKeyboardKey.arrowUp: 1073741906, // SDLK_UP
-      services.LogicalKeyboardKey.arrowDown: 1073741905, // SDLK_DOWN
-      services.LogicalKeyboardKey.arrowLeft: 1073741904, // SDLK_LEFT
-      services.LogicalKeyboardKey.arrowRight: 1073741903, // SDLK_RIGHT
-      services.LogicalKeyboardKey.home: 1073741898,
-      services.LogicalKeyboardKey.end: 1073741901,
-      services.LogicalKeyboardKey.pageUp: 1073741899,
-      services.LogicalKeyboardKey.pageDown: 1073741900,
-      services.LogicalKeyboardKey.delete: 127,
-      services.LogicalKeyboardKey.insert: 1073741897,
-      services.LogicalKeyboardKey.shiftLeft: 1073742049,
-      services.LogicalKeyboardKey.shiftRight: 1073742053,
-      services.LogicalKeyboardKey.controlLeft: 1073742048,
-      services.LogicalKeyboardKey.controlRight: 1073742052,
-      services.LogicalKeyboardKey.altLeft: 1073742050,
-      services.LogicalKeyboardKey.altRight: 1073742054,
-      services.LogicalKeyboardKey.metaLeft: 1073742051,
-      services.LogicalKeyboardKey.metaRight: 1073742055,
-    };
-
-    final mapped = mapping[logicalKey];
-    if (mapped != null) {
-      return mapped;
-    }
-
-    return 0;
-  }
 }
