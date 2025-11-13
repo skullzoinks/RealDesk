@@ -1,83 +1,105 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:logger/logger.dart';
 
 import '../webrtc/data_channel.dart';
-import 'schema/input_messages.dart';
 
-/// Gamepad input controller
-/// Note: Flutter doesn't have built-in gamepad support yet.
-/// This is a placeholder for future platform channel implementation.
+/// Gamepad input controller that bridges native controller events into the
+/// WebRTC data channel.
 class GamepadController {
   GamepadController({
     required this.dataChannelManager,
-    this.pollInterval = const Duration(milliseconds: 16), // ~60Hz
   }) : _logger = Logger();
 
+  static const EventChannel _eventChannel =
+      EventChannel('realdesk/hardware_gamepad');
+
   final DataChannelManager dataChannelManager;
-  final Duration pollInterval;
   final Logger _logger;
 
-  Timer? _pollTimer;
-  final List<GamepadState> _gamepadStates = [];
+  StreamSubscription<dynamic>? _nativeSubscription;
 
-  /// Start gamepad polling
+  bool get _isAndroid =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  /// Start listening for hardware gamepad events.
   void start() {
-    if (_pollTimer != null) {
-      _logger.w('Gamepad polling already started');
+    if (_nativeSubscription != null) {
+      _logger.w('Gamepad listener already started');
       return;
     }
 
-    _logger.i('Starting gamepad polling');
-    _pollTimer = Timer.periodic(pollInterval, (_) {
-      _pollGamepads();
+    if (!_isAndroid) {
+      _logger.i('Gamepad hardware listener only available on Android');
+      return;
+    }
+
+    _logger.i('Subscribing to Android hardware gamepad stream');
+    _nativeSubscription = _eventChannel
+        .receiveBroadcastStream()
+        .listen(_handleNativeEvent, onError: (error, stackTrace) {
+      _logger.w('Gamepad stream error: $error\n$stackTrace');
     });
   }
 
-  /// Stop gamepad polling
+  /// Stop listening.
   void stop() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    _logger.i('Stopped gamepad polling');
+    _nativeSubscription?.cancel();
+    _nativeSubscription = null;
   }
 
-  /// Poll gamepad states
-  void _pollGamepads() {
-    // TODO: Implement platform channel to get gamepad state
-    // This would require native code for each platform (Android, iOS, Windows, etc.)
-
-    // Example of what the implementation would look like:
-    for (var i = 0; i < _gamepadStates.length; i++) {
-      final state = _gamepadStates[i];
-      dataChannelManager.sendGamepadEvent(gamepadEvent: {
-        'index': state.index,
-        'axes': state.axes,
-        'buttons': state.buttons,
-      });
+  void _handleNativeEvent(dynamic event) {
+    if (event is! Map) {
+      return;
     }
+
+    final deviceId = (event['deviceId'] as num?)?.toInt() ?? 0;
+    final timestamp = (event['timestamp'] as num?)?.toInt() ??
+        DateTime.now().millisecondsSinceEpoch;
+    final axes = _toDoubleList(event['axes']);
+    final buttons = _toBoolList(event['buttons']);
+
+    dataChannelManager.sendGamepadEvent(
+      gamepadEvent: {
+        'index': deviceId,
+        'axes': axes,
+        'buttons': buttons,
+        'timestamp': timestamp,
+      },
+    );
   }
 
-  /// Manually update gamepad state (for testing or custom input)
+  List<double> _toDoubleList(dynamic source) {
+    if (source is List) {
+      return source
+          .map((value) => (value as num?)?.toDouble() ?? 0.0)
+          .toList(growable: false);
+    }
+    return const [];
+  }
+
+  List<bool> _toBoolList(dynamic source) {
+    if (source is List) {
+      return source.map((value) => value == true).toList(growable: false);
+    }
+    return const [];
+  }
+
+  /// Manual update hook (primarily for testing).
   void updateGamepadState({
     required int index,
     required List<double> axes,
     required List<bool> buttons,
   }) {
-    final state = GamepadState(
-      index: index,
-      axes: axes,
-      buttons: buttons,
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-    );
-
-    if (index < _gamepadStates.length) {
-      _gamepadStates[index] = state;
-    } else {
-      _gamepadStates.add(state);
-    }
-
     dataChannelManager.sendGamepadEvent(
-      gamepadEvent: {'index': index, 'axes': axes, 'buttons': buttons},
+      gamepadEvent: {
+        'index': index,
+        'axes': axes,
+        'buttons': buttons,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      },
     );
   }
 

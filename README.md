@@ -208,6 +208,26 @@ final statsCollector = StatsCollector(
 );
 ```
 
+### Android MediaCodec 硬件编解码
+
+- `lib/webrtc/sdp_utils.dart` 会重写 SDP，将 H264 排在视频 `m=` 行最前面，这样 Android 端就会优先协商出 MediaCodec 可直接处理的 H264。
+- `PeerManager` 在 `createOffer` / `createAnswer` 里调用该工具，因此无论是主叫还是被叫都能触发硬编解码。
+- 运行在 Android 上时，如果看到日志 `Applied Android H264 codec preference for hardware acceleration`，说明已经切到硬件路径；若日志提示 `Remote SDP does not advertise H264`，表示远端没有提供 H264，只能退回软编解码。
+- 使用 `flutter logs` 或 `adb logcat | grep PeerManager` 可以确认当前设备是否已经启用硬编解码。
+
+### 视频编码优先级
+
+- 在“设置”页新增“优先视频编码器”下拉选择，可在 VP8、VP9、AV1、H264、H265 之间切换。
+- `PeerManager` 会读取该偏好，并结合 Android 默认的 MediaCodec 顺序（H265→H264→VP9→VP8→AV1）重写 SDP，尽量优先协商硬件可解码的格式。
+- 如果偏好的编码器不在远端 SDP 中，日志会提示 `Preferred codecs [...] not found`，以便快速诊断。
+
+### Android 外设（蓝牙 / OTG 键鼠 / 手柄）
+
+- `android/app/src/main/AndroidManifest.xml` 中声明了蓝牙、USB Host、Gamepad 等可选硬件特性，并请求了 `BLUETOOTH_ADMIN`/`BLUETOOTH_CONNECT` 等权限，确保可以访问外接设备。
+- 新增 `HardwareInputPlugin`（Kotlin）通过事件通道 `realdesk/hardware_gamepad` 将 Android 原生的手柄轴/按键数据推送给 Flutter。
+- `GamepadController` 订阅该事件流后，立即把硬件状态转换成 `gamepad` DataChannel 消息，远端主机可获得 60Hz 以上的轴与按钮更新。
+- Flutter `Listener` + `Focus` 组合继续负责键盘、鼠标（含蓝牙/OTG）事件，确保物理键鼠操作可以零配置直达远端。
+
 ## 故障排除
 
 ### 无法连接到信令服务器

@@ -3,6 +3,14 @@ import 'package:flutter/material.dart';
 import '../../settings/settings_model.dart';
 import '../../settings/settings_store.dart';
 
+const _codecOptions = [
+  {'value': 'H264', 'label': 'H.264 / AVC'},
+  {'value': 'H265', 'label': 'H.265 / HEVC'},
+  {'value': 'VP9', 'label': 'VP9'},
+  {'value': 'VP8', 'label': 'VP8'},
+  {'value': 'AV1', 'label': 'AV1'},
+];
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({Key? key}) : super(key: key);
 
@@ -138,6 +146,33 @@ class _SettingsPageState extends State<SettingsPage> {
                   title: const Text('默认使用相对鼠标模式'),
                   value: _s.defaultMouseRelative,
                   onChanged: (v) => setState(() => _s.defaultMouseRelative = v),
+                ),
+                const SizedBox(height: 16),
+                const Divider(),
+                const SizedBox(height: 8),
+                const Text('视频编解码'),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: _s.preferredVideoCodec,
+                  decoration: const InputDecoration(
+                    labelText: '优先视频编码器',
+                    helperText: '仅对接收端可用的编码器生效，Android 上优先尝试 MediaCodec 硬件解码',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: _codecOptions
+                      .map(
+                        (option) => DropdownMenuItem<String>(
+                          value: option['value']!,
+                          child: Text(option['label']!),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() {
+                      _s.preferredVideoCodec = value;
+                    });
+                  },
                 ),
               ],
             ),

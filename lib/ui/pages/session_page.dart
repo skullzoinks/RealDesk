@@ -11,19 +11,25 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:logger/logger.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../../input/gamepad_controller.dart';
 import '../../input/keyboard_controller.dart';
 import '../../input/mouse_controller.dart';
+import '../../input/input_injector.dart';
 import '../../input/schema/input_messages.dart';
 import '../../metrics/stats_collector.dart';
 import '../../signaling/signaling_client.dart';
 import '../../signaling/models/signaling_messages.dart' as signaling;
+import '../../webrtc/android_screen_capturer.dart';
 import '../../webrtc/data_channel.dart';
 import '../../webrtc/media_renderer.dart';
 import '../../webrtc/peer_manager.dart';
 import '../../settings/settings_model.dart';
 import '../../settings/settings_store.dart';
+import '../../utils/orientation_manager.dart';
+import '../../utils/audio_manager.dart';
 import '../widgets/control_bar.dart';
 import '../widgets/metrics_overlay.dart';
+import '../widgets/orientation_dialog.dart';
 
 /// Remote session page with video stream and input handling
 class SessionPage extends StatefulWidget {
@@ -45,14 +51,22 @@ class SessionPage extends StatefulWidget {
 class _SessionPageState extends State<SessionPage> {
   final _logger = Logger();
   final _videoKey = GlobalKey();
+  final _focusNode = FocusNode(
+    canRequestFocus: true,
+    descendantsAreFocusable: false,
+  );
 
   late SignalingClient _signalingClient;
   late PeerManager _peerManager;
+  final AndroidScreenCapturer _androidScreenCapturer = AndroidScreenCapturer();
 
   DataChannelManager? _dataChannelManager;
   MouseController? _mouseController;
   KeyboardController? _keyboardController;
+  GamepadController? _gamepadController;
   StatsCollector? _statsCollector;
+  AudioRenderer? _audioRenderer;
+  InputInjector? _inputInjector;
 
   MediaStream? _remoteStream;
   bool _isConnected = false;
@@ -94,6 +108,16 @@ class _SessionPageState extends State<SessionPage> {
     // Load settings
     _settings = await SettingsStore.load();
 
+    // Configure audio manager
+    AudioManager.instance.loadFromSettings(
+      enableAudio: _settings.enableAudio,
+      audioVolume: _settings.audioVolume,
+    );
+
+    // Initialize input injector for receiving remote control
+    _inputInjector = InputInjector();
+    await _inputInjector!.initialize();
+
     // Create signaling client with settings
     _signalingClient = SignalingClient(
       signalingUrl: widget.signalingUrl,
@@ -103,8 +127,14 @@ class _SessionPageState extends State<SessionPage> {
     _signalingClient.messageStream.listen(_onSignalingMessage);
     _signalingClient.stateStream.listen(_onSignalingStateChanged);
 
+    // Create audio renderer for remote audio playback
+    _audioRenderer = AudioRenderer();
+    await _audioRenderer!.initialize();
+
     // Create peer manager (ICE will be set after accept)
-    _peerManager = PeerManager();
+    _peerManager = PeerManager(
+      preferredVideoCodec: _settings.preferredVideoCodec,
+    );
     _peerManager.remoteStream.listen(_onRemoteStream);
     _peerManager.iceCandidate.listen(_onIceCandidate);
     _peerManager.connectionState.listen(_onConnectionStateChanged);
@@ -193,6 +223,7 @@ class _SessionPageState extends State<SessionPage> {
       effectiveIceServers,
     );
     await _peerManager.createInputChannels();
+    await _ensureAndroidScreenCapture();
 
     _dataChannelManager = DataChannelManager(
       rtChannel: _peerManager.rtChannel,
@@ -210,6 +241,10 @@ class _SessionPageState extends State<SessionPage> {
     _keyboardController = KeyboardController(
       dataChannelManager: _dataChannelManager!,
     );
+    _gamepadController?.dispose();
+    _gamepadController = GamepadController(
+      dataChannelManager: _dataChannelManager!,
+    )..start();
 
     _dataChannelSubscription?.cancel();
     _dataChannelSubscription = _peerManager.dataChannelMessage.listen(
@@ -229,6 +264,7 @@ class _SessionPageState extends State<SessionPage> {
     await _peerManager.setRemoteDescription(
       RTCSessionDescription(sdp, 'offer'),
     );
+    await _ensureAndroidScreenCapture();
 
     final answer = await _peerManager.createAnswer();
     _signalingClient.sendAnswer(answer.sdp!);
@@ -253,6 +289,87 @@ class _SessionPageState extends State<SessionPage> {
     );
   }
 
+  Future<void> _ensureAndroidScreenCapture() async {
+    if (!_androidScreenCapturer.isSupported) {
+      return;
+    }
+    if (_peerManager.peerConnection == null) {
+      return;
+    }
+
+    try {
+      final stream = await _androidScreenCapturer.start();
+      if (stream == null) {
+        return;
+      }
+      if (identical(stream, _peerManager.localStream)) {
+        return;
+      }
+      await _peerManager.setLocalMediaStream(stream);
+      _logger.i('Android screen capture attached');
+    } catch (e, stackTrace) {
+      _logger.w(
+        'Failed to start Android screen capture: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      _showScreenCaptureError(e);
+    }
+  }
+
+  Future<void> _teardownAndroidScreenCapture() async {
+    if (!_androidScreenCapturer.isSupported) {
+      return;
+    }
+    if (_peerManager.peerConnection != null &&
+        _peerManager.localStream != null) {
+      try {
+        await _peerManager.setLocalMediaStream(null);
+      } catch (e, stackTrace) {
+        _logger.w(
+          'Failed to detach local stream: $e',
+          error: e,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+    try {
+      await _androidScreenCapturer.stop();
+    } catch (e, stackTrace) {
+      _logger.w(
+        'Failed to stop Android screen capture: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
+  void _showScreenCaptureError(Object error) {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) {
+      return;
+    }
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('无法开启屏幕捕获: ${_screenCaptureErrorMessage(error)}'),
+      ),
+    );
+  }
+
+  String _screenCaptureErrorMessage(Object error) {
+    if (error is PlatformException) {
+      final message = error.message;
+      if (message != null && message.isNotEmpty) {
+        return message;
+      }
+      return error.code;
+    }
+    return error.toString();
+  }
+
   void _handleError(Map<String, dynamic> message) {
     final errorMessage = message['message'] as String?;
     _logger.e('Signaling error: $errorMessage');
@@ -269,10 +386,15 @@ class _SessionPageState extends State<SessionPage> {
   }
 
   void _onRemoteStream(MediaStream stream) {
-    _logger.i('Received remote stream');
+    _logger.i(
+        'Received remote stream with ${stream.getVideoTracks().length} video tracks and ${stream.getAudioTracks().length} audio tracks');
+
     setState(() {
       _remoteStream = stream;
     });
+
+    // Set up audio playback
+    _setupAudioPlayback(stream);
 
     // Start stats collection
     if (_peerManager.peerConnection != null) {
@@ -280,6 +402,36 @@ class _SessionPageState extends State<SessionPage> {
         peerConnection: _peerManager.peerConnection!,
       );
       _statsCollector!.start();
+    }
+
+    // Request focus for keyboard input (without showing soft keyboard)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _focusNode.requestFocus();
+        // Hide soft keyboard on Android
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
+    });
+  }
+
+  void _setupAudioPlayback(MediaStream stream) {
+    final audioTracks = stream.getAudioTracks();
+    if (audioTracks.isNotEmpty && _audioRenderer != null) {
+      _logger.i(
+          'Setting up audio playback for ${audioTracks.length} audio track(s)');
+
+      // Configure audio tracks with current settings
+      AudioManager.instance.configureMediaStream(stream);
+
+      // Set stream to renderer
+      _audioRenderer!.setStream(stream);
+
+      _logger.i(
+          'Audio playback configured: ${AudioManager.instance.getAudioStatusDescription()}');
+    } else if (audioTracks.isEmpty) {
+      _logger.w('No audio tracks found in remote stream');
+    } else {
+      _logger.e('Audio renderer not initialized');
     }
   }
 
@@ -339,9 +491,112 @@ class _SessionPageState extends State<SessionPage> {
       case 'cursorImage':
         _handleCursorImageMessage(payload);
         break;
+      case 'mouseAbs':
+        _handleMouseAbsoluteMessage(payload);
+        break;
+      case 'mouseRel':
+        _handleMouseRelativeMessage(payload);
+        break;
+      case 'mouseWheel':
+        _handleMouseWheelMessage(payload);
+        break;
+      case 'keyboard':
+        _handleKeyboardMessage(payload);
+        break;
+      case 'touch':
+        _handleTouchMessage(payload);
+        break;
       default:
+        _logger.d('Unknown data channel message type: $type');
         break;
     }
+  }
+
+  /// Handle incoming mouse absolute position event
+  void _handleMouseAbsoluteMessage(Map<String, dynamic> payload) {
+    final x = (payload['x'] as num?)?.toDouble();
+    final y = (payload['y'] as num?)?.toDouble();
+    final displayW = (payload['displayW'] as num?)?.toInt();
+    final displayH = (payload['displayH'] as num?)?.toInt();
+    final buttons = (payload['buttons'] as num?)?.toInt() ?? 0;
+
+    if (x == null || y == null || displayW == null || displayH == null) {
+      _logger.w('Invalid mouseAbs message: missing required fields');
+      return;
+    }
+
+    _inputInjector?.injectMouseAbsolute(
+      x: x,
+      y: y,
+      displayW: displayW,
+      displayH: displayH,
+      buttons: buttons,
+    );
+  }
+
+  /// Handle incoming mouse relative movement event
+  void _handleMouseRelativeMessage(Map<String, dynamic> payload) {
+    final dx = (payload['dx'] as num?)?.toDouble();
+    final dy = (payload['dy'] as num?)?.toDouble();
+    final buttons = (payload['buttons'] as num?)?.toInt() ?? 0;
+
+    if (dx == null || dy == null) {
+      _logger.w('Invalid mouseRel message: missing required fields');
+      return;
+    }
+
+    _inputInjector?.injectMouseRelative(
+      dx: dx,
+      dy: dy,
+      buttons: buttons,
+    );
+  }
+
+  /// Handle incoming mouse wheel/scroll event
+  void _handleMouseWheelMessage(Map<String, dynamic> payload) {
+    final dx = (payload['dx'] as num?)?.toDouble();
+    final dy = (payload['dy'] as num?)?.toDouble();
+
+    if (dx == null || dy == null) {
+      _logger.w('Invalid mouseWheel message: missing required fields');
+      return;
+    }
+
+    _inputInjector?.injectMouseWheel(dx: dx, dy: dy);
+  }
+
+  /// Handle incoming keyboard event
+  void _handleKeyboardMessage(Map<String, dynamic> payload) {
+    final key = payload['key'] as String?;
+    final code = (payload['code'] as num?)?.toInt() ?? 0;
+    final down = payload['down'] as bool? ?? false;
+    final mods = (payload['mods'] as num?)?.toInt() ?? 0;
+
+    if (key == null) {
+      _logger.w('Invalid keyboard message: missing key field');
+      return;
+    }
+
+    _inputInjector?.injectKeyboard(
+      key: key,
+      code: code,
+      down: down,
+      mods: mods,
+    );
+  }
+
+  /// Handle incoming touch event
+  void _handleTouchMessage(Map<String, dynamic> payload) {
+    final touches = payload['touches'] as List<dynamic>?;
+
+    if (touches == null) {
+      _logger.w('Invalid touch message: missing touches field');
+      return;
+    }
+
+    final touchList = touches.whereType<Map<String, dynamic>>().toList();
+
+    _inputInjector?.injectTouch(touches: touchList);
   }
 
   void _handleCursorImageMessage(Map<String, dynamic> payload) {
@@ -428,9 +683,108 @@ class _SessionPageState extends State<SessionPage> {
     setState(() {
       _remoteVideoSize = newSize;
     });
+
+    // 根据视频尺寸自动调整屏幕方向
+    _autoAdjustOrientation(width, height);
+
     _logger.i(
       'Remote video size updated: ${newSize.width.toInt()}x${newSize.height.toInt()}',
     );
+  }
+
+  /// 根据视频尺寸自动调整屏幕方向
+  Future<void> _autoAdjustOrientation(int width, int height) async {
+    try {
+      await OrientationManager.instance
+          .adjustOrientationForVideo(width, height);
+    } catch (e) {
+      _logger.w('自动调整屏幕方向失败: $e');
+    }
+  }
+
+  /// 切换屏幕方向
+  Future<void> _toggleOrientation() async {
+    try {
+      await OrientationManager.instance.toggleOrientation();
+      _showOrientationMessage();
+    } catch (e) {
+      _logger.w('切换屏幕方向失败: $e');
+    }
+  }
+
+  /// 锁定为横屏
+  Future<void> _lockToLandscape() async {
+    try {
+      await OrientationManager.instance.lockToLandscape();
+      _showOrientationMessage('已锁定为横屏');
+    } catch (e) {
+      _logger.w('锁定横屏失败: $e');
+    }
+  }
+
+  /// 锁定为竖屏
+  Future<void> _lockToPortrait() async {
+    try {
+      await OrientationManager.instance.lockToPortrait();
+      _showOrientationMessage('已锁定为竖屏');
+    } catch (e) {
+      _logger.w('锁定竖屏失败: $e');
+    }
+  }
+
+  /// 允许所有方向
+  Future<void> _allowAllOrientations() async {
+    try {
+      await OrientationManager.instance.allowAllOrientations();
+      _showOrientationMessage('已允许所有方向');
+    } catch (e) {
+      _logger.w('允许所有方向失败: $e');
+    }
+  }
+
+  /// 显示屏幕方向变化消息
+  void _showOrientationMessage([String? message]) {
+    final orientation = MediaQuery.of(context).orientation;
+    final defaultMessage =
+        '当前屏幕方向: ${OrientationManager.instance.getOrientationDescription(orientation)}';
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message ?? defaultMessage),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// 显示屏幕方向菜单
+  Future<void> _showOrientationMenu() async {
+    await showQuickOrientationSheet(context);
+  }
+
+  /// 切换音频开关
+  Future<void> _toggleAudio() async {
+    await AudioManager.instance.toggleMute();
+
+    // 重新配置当前的音频流
+    if (_remoteStream != null) {
+      AudioManager.instance.configureMediaStream(_remoteStream!);
+    }
+
+    setState(() {
+      // 触发UI更新
+    });
+
+    // 显示音频状态
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(AudioManager.instance.getAudioStatusDescription()),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   void _updatePointerInside(bool inside) {
@@ -663,6 +1017,11 @@ class _SessionPageState extends State<SessionPage> {
     _dataChannelSubscription?.cancel();
     _remoteCursorImage?.dispose();
     _statsCollector?.dispose();
+    _gamepadController?.dispose();
+    _audioRenderer?.dispose();
+    _inputInjector?.dispose();
+    _focusNode.dispose();
+    unawaited(_teardownAndroidScreenCapture());
     _peerManager.dispose();
     _signalingClient.dispose();
     if (_isFullScreen) {
@@ -697,6 +1056,10 @@ class _SessionPageState extends State<SessionPage> {
                       onToggleFullScreen: _toggleFullScreen,
                       onDisconnect: _disconnect,
                       isFullScreen: _isFullScreen,
+                      onToggleOrientation: _toggleOrientation,
+                      onOrientationMenu: _showOrientationMenu,
+                      onToggleAudio: _toggleAudio,
+                      audioEnabled: !AudioManager.instance.muted,
                     ),
                   ),
                 ),
@@ -733,6 +1096,10 @@ class _SessionPageState extends State<SessionPage> {
       content = Listener(
         behavior: HitTestBehavior.opaque,
         onPointerDown: (event) {
+          // Hide soft keyboard when user interacts with video surface
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
+          _focusNode.requestFocus();
+
           final viewSize = _getVideoSize();
           _updatePointerInside(true);
           _recordPointerPosition(event, viewSize);
@@ -763,7 +1130,10 @@ class _SessionPageState extends State<SessionPage> {
           _mouseController?.onPointerCancel(event);
         },
         child: Focus(
+          focusNode: _focusNode,
           autofocus: true,
+          skipTraversal: true,
+          includeSemantics: false,
           onKeyEvent: (node, event) {
             final handled = _keyboardController?.handleKeyEvent(event) ?? false;
             return handled ? KeyEventResult.handled : KeyEventResult.ignored;

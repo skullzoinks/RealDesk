@@ -1,29 +1,58 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:logger/logger.dart';
 
 import '../settings/settings_model.dart';
+import 'sdp_utils.dart';
 
 /// WebRTC peer connection manager
 class PeerManager {
-  PeerManager({List<dynamic>? iceServers})
-    : _iceServers =
-          iceServers != null
-              ? List<dynamic>.from(iceServers)
-              : RealDeskSettings.defaultIceServers
-                  .map((server) => Map<String, dynamic>.from(server))
-                  .toList(),
-      _logger = Logger();
+  PeerManager({
+    List<dynamic>? iceServers,
+    String? preferredVideoCodec,
+  })  : _iceServers = iceServers != null
+            ? List<dynamic>.from(iceServers)
+            : RealDeskSettings.defaultIceServers
+                .map((server) => Map<String, dynamic>.from(server))
+                .toList(),
+        _preferredVideoCodec = preferredVideoCodec?.trim().toUpperCase(),
+        _logger = Logger();
 
   final List<dynamic> _iceServers;
+  final String? _preferredVideoCodec;
   final Logger _logger;
 
   RTCPeerConnection? _peerConnection;
   RTCDataChannel? _dataChannel;
   RTCDataChannel? _dataChannelRt;
   RTCDataChannel? _dataChannelReliable;
+  MediaStream? _localStream;
+  final List<RTCRtpSender> _localSenders = [];
+  bool _audioReceiverProvisioned = false;
   bool _isClosed = false;
+  bool get _preferHardwareCodecs =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  static const Map<String, List<String>> _codecSynonyms = {
+    'H264': ['H264', 'AVC'],
+    'H265': ['H265', 'HEVC'],
+    'VP8': ['VP8'],
+    'VP9': ['VP9'],
+    'AV1': ['AV1', 'AV1X'],
+  };
+
+  static const List<String> _androidHardwareCodecOrder = [
+    'H265',
+    'HEVC',
+    'H264',
+    'AVC',
+    'VP9',
+    'VP8',
+    'AV1',
+    'AV1X',
+  ];
 
   final _remoteStreamController = StreamController<MediaStream>.broadcast();
   final _iceCandidateController = StreamController<RTCIceCandidate>.broadcast();
@@ -47,6 +76,7 @@ class PeerManager {
   RTCDataChannel? get dataChannel => _dataChannel;
   RTCDataChannel? get rtChannel => _dataChannelRt;
   RTCDataChannel? get reliableChannel => _dataChannelReliable;
+  MediaStream? get localStream => _localStream;
 
   /// Create peer connection
   Future<void> initializePeerConnection() async {
@@ -67,6 +97,7 @@ class PeerManager {
       configuration,
       <String, dynamic>{},
     );
+    await _ensureAudioReceiver();
 
     // Set up event handlers
     _peerConnection!.onTrack = _onTrack;
@@ -95,6 +126,7 @@ class PeerManager {
       configuration,
       <String, dynamic>{},
     );
+    await _ensureAudioReceiver();
     _peerConnection!.onTrack = _onTrack;
     _peerConnection!.onIceCandidate = _onIceCandidate;
     _peerConnection!.onConnectionState = _onConnectionState;
@@ -133,10 +165,9 @@ class PeerManager {
       throw Exception('Peer connection not created');
     }
     // Unreliable, unordered real-time channel
-    final rtInit =
-        RTCDataChannelInit()
-          ..ordered = false
-          ..maxRetransmits = 0;
+    final rtInit = RTCDataChannelInit()
+      ..ordered = false
+      ..maxRetransmits = 0;
     _dataChannelRt = await _peerConnection!.createDataChannel(
       'input-rt',
       rtInit,
@@ -163,12 +194,13 @@ class PeerManager {
 
     _logger.i('Creating offer');
 
-    final offer = await _peerConnection!.createOffer({
+    var offer = await _peerConnection!.createOffer({
       'offerToReceiveVideo': 1,
       'offerToReceiveAudio': 1,
       'mandatory': {'OfferToReceiveVideo': true, 'OfferToReceiveAudio': true},
     });
 
+    offer = _applyLocalCodecPreferences(offer);
     await _peerConnection!.setLocalDescription(offer);
 
     return offer;
@@ -182,7 +214,8 @@ class PeerManager {
 
     _logger.i('Creating answer');
 
-    final answer = await _peerConnection!.createAnswer();
+    var answer = await _peerConnection!.createAnswer();
+    answer = _applyLocalCodecPreferences(answer);
     await _peerConnection!.setLocalDescription(answer);
 
     return answer;
@@ -219,6 +252,39 @@ class PeerManager {
     _dataChannel!.send(message);
   }
 
+  /// Attach (or replace) the local media stream that should be published.
+  Future<void> setLocalMediaStream(MediaStream? stream) async {
+    if (_peerConnection == null) {
+      throw Exception('Peer connection not created');
+    }
+
+    await _removeLocalSenders();
+    _localStream = stream;
+
+    if (stream == null) {
+      return;
+    }
+
+    final tracks = <MediaStreamTrack>[
+      ...stream.getAudioTracks(),
+      ...stream.getVideoTracks(),
+    ];
+
+    for (final track in tracks) {
+      try {
+        final sender = await _peerConnection!.addTrack(track, stream);
+        _localSenders.add(sender);
+      } catch (e, stackTrace) {
+        _logger.e(
+          'Failed to add local track ${track.id}: $e',
+          error: e,
+          stackTrace: stackTrace,
+        );
+        rethrow;
+      }
+    }
+  }
+
   /// Handle incoming track
   void _onTrack(RTCTrackEvent event) async {
     _logger.i('Received track: ${event.track.kind}');
@@ -229,7 +295,7 @@ class PeerManager {
     } else {
       try {
         stream = await createLocalMediaStream('remote-${event.track.id}');
-        stream.addTrack(event.track);
+        await stream.addTrack(event.track);
       } catch (e) {
         _logger.w('Failed to create fallback stream: $e');
       }
@@ -311,8 +377,10 @@ class PeerManager {
       _peerConnection!.onConnectionState = null;
       _peerConnection!.onDataChannel = null;
     }
+    await _removeLocalSenders();
     await _peerConnection?.close();
     _peerConnection = null;
+    _audioReceiverProvisioned = false;
   }
 
   /// Dispose resources
@@ -328,5 +396,122 @@ class PeerManager {
 
   bool _canAddTo(StreamController controller) {
     return !_isClosed && !controller.isClosed;
+  }
+
+  Future<void> _removeLocalSenders() async {
+    if (_localSenders.isEmpty) {
+      _localStream = null;
+      return;
+    }
+
+    final senders = List<RTCRtpSender>.from(_localSenders);
+    _localSenders.clear();
+
+    for (final sender in senders) {
+      try {
+        await _peerConnection?.removeTrack(sender);
+      } catch (e, stackTrace) {
+        _logger.w(
+          'Failed to remove local sender: $e',
+          error: e,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+
+    _localStream = null;
+  }
+
+  Future<void> _ensureAudioReceiver() async {
+    if (_peerConnection == null || _audioReceiverProvisioned) {
+      return;
+    }
+    try {
+      await _peerConnection!.addTransceiver(
+        kind: RTCRtpMediaType.RTCRtpMediaTypeAudio,
+        init: RTCRtpTransceiverInit(
+          direction: TransceiverDirection.RecvOnly,
+        ),
+      );
+      _audioReceiverProvisioned = true;
+      _logger.i('Provisioned recvonly audio transceiver for remote playback');
+    } catch (e, stackTrace) {
+      _logger.w(
+        'Failed to provision audio transceiver: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
+  RTCSessionDescription _applyLocalCodecPreferences(
+    RTCSessionDescription description,
+  ) {
+    if (description.sdp == null) {
+      return description;
+    }
+
+    final originalSdp = description.sdp!;
+    final codecChain = _codecPreferenceChain();
+    if (codecChain.isEmpty) {
+      return description;
+    }
+
+    final updated = SdpUtils.preferCodecs(
+      sdp: originalSdp,
+      mediaType: 'video',
+      codecs: codecChain,
+    );
+    if (updated == originalSdp) {
+      _logger.w(
+        'Preferred codecs $codecChain not found in remote SDP; using sender defaults',
+      );
+      return description;
+    }
+
+    _logger.i(
+      'Applied video codec preference order: ${codecChain.join(' > ')}',
+    );
+    return RTCSessionDescription(updated, description.type);
+  }
+
+  List<String> _codecPreferenceChain() {
+    final ordered = <String>[];
+    final canonicalPreferred = _canonicalCodecName(_preferredVideoCodec);
+    if (canonicalPreferred != null) {
+      ordered.addAll(
+        _codecSynonyms[canonicalPreferred] ?? [canonicalPreferred],
+      );
+    }
+    if (_preferHardwareCodecs) {
+      ordered.addAll(_androidHardwareCodecOrder);
+    }
+    return _dedupePreservingOrder(ordered);
+  }
+
+  String? _canonicalCodecName(String? codec) {
+    if (codec == null || codec.isEmpty) {
+      return null;
+    }
+    final upper = codec.toUpperCase();
+    for (final entry in _codecSynonyms.entries) {
+      if (entry.value.contains(upper)) {
+        return entry.key;
+      }
+    }
+    return upper;
+  }
+
+  List<String> _dedupePreservingOrder(List<String> codecs) {
+    final seen = <String>{};
+    final result = <String>[];
+    for (final codec in codecs) {
+      if (codec.isEmpty) continue;
+      final upper = codec.toUpperCase();
+      if (seen.add(upper)) {
+        result.add(upper);
+      }
+    }
+    return result;
   }
 }

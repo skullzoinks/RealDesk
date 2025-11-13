@@ -25,6 +25,9 @@ class RealDeskSettings {
     this.maxReconnectAttempts = 3,
     this.defaultShowMetrics = false,
     this.defaultMouseRelative = false,
+    this.preferredVideoCodec = 'H264',
+    this.enableAudio = true,
+    this.audioVolume = 1.0,
   });
 
   bool insecure;
@@ -36,33 +39,42 @@ class RealDeskSettings {
   int maxReconnectAttempts;
   bool defaultShowMetrics;
   bool defaultMouseRelative;
+  String preferredVideoCodec;
+  bool enableAudio;
+  double audioVolume; // 0.0 to 1.0
 
   Map<String, dynamic> toMap() => {
-    'insecure': insecure,
-    'noGoogleStun': noGoogleStun,
-    'overrideIce': overrideIce,
-    'iceServersJson': iceServersJson,
-    'heartbeatSeconds': heartbeatSeconds,
-    'reconnectDelaySeconds': reconnectDelaySeconds,
-    'maxReconnectAttempts': maxReconnectAttempts,
-    'defaultShowMetrics': defaultShowMetrics,
-    'defaultMouseRelative': defaultMouseRelative,
-  };
+        'insecure': insecure,
+        'noGoogleStun': noGoogleStun,
+        'overrideIce': overrideIce,
+        'iceServersJson': iceServersJson,
+        'heartbeatSeconds': heartbeatSeconds,
+        'reconnectDelaySeconds': reconnectDelaySeconds,
+        'maxReconnectAttempts': maxReconnectAttempts,
+        'defaultShowMetrics': defaultShowMetrics,
+        'defaultMouseRelative': defaultMouseRelative,
+        'preferredVideoCodec': preferredVideoCodec,
+        'enableAudio': enableAudio,
+        'audioVolume': audioVolume,
+      };
 
   static RealDeskSettings fromMap(Map<String, dynamic> m) {
     return RealDeskSettings(
       insecure: m['insecure'] ?? false,
       noGoogleStun: m['noGoogleStun'] ?? false,
       overrideIce: m['overrideIce'] ?? false,
-      iceServersJson:
-          (m['iceServersJson'] as String?)?.isNotEmpty == true
-              ? m['iceServersJson']
-              : RealDeskSettings.defaultIceServersJson,
+      iceServersJson: (m['iceServersJson'] as String?)?.isNotEmpty == true
+          ? m['iceServersJson']
+          : RealDeskSettings.defaultIceServersJson,
       heartbeatSeconds: m['heartbeatSeconds'] ?? 5,
       reconnectDelaySeconds: m['reconnectDelaySeconds'] ?? 3,
       maxReconnectAttempts: m['maxReconnectAttempts'] ?? 3,
       defaultShowMetrics: m['defaultShowMetrics'] ?? false,
       defaultMouseRelative: m['defaultMouseRelative'] ?? false,
+      preferredVideoCodec:
+          (m['preferredVideoCodec'] as String?)?.toUpperCase() ?? 'H264',
+      enableAudio: m['enableAudio'] ?? true,
+      audioVolume: (m['audioVolume'] as num?)?.toDouble() ?? 1.0,
     );
   }
 }

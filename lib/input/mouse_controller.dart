@@ -10,6 +10,8 @@ import 'schema/input_messages.dart';
 /// Mouse input controller
 class MouseController {
   static const double _wheelScale = 0.25;
+  static const Duration _doubleClickThreshold = Duration(milliseconds: 500);
+  static const double _doubleClickDistanceThreshold = 10.0;
 
   MouseController({
     required this.dataChannelManager,
@@ -24,6 +26,11 @@ class MouseController {
   final Map<int, Set<MouseButton>> _pointerButtons = {};
   Size _remoteVideoSize = Size.zero;
 
+  // Double-click detection state
+  DateTime? _lastClickTime;
+  Offset? _lastClickPosition;
+  int _clickCount = 0;
+
   void updateRemoteVideoSize(Size size) {
     if (size.isEmpty) {
       return;
@@ -34,6 +41,33 @@ class MouseController {
   /// Handle pointer down event
   void onPointerDown(PointerDownEvent event, Size viewSize) {
     _updateButtonState(event);
+
+    // Detect double-click for mouse devices
+    final isMouseClick = event.kind == PointerDeviceKind.mouse &&
+        _pressedButtons.contains(MouseButton.left);
+
+    if (isMouseClick) {
+      final now = DateTime.now();
+      final position = event.localPosition;
+
+      if (_lastClickTime != null &&
+          _lastClickPosition != null &&
+          now.difference(_lastClickTime!) <= _doubleClickThreshold) {
+        final distance = (position - _lastClickPosition!).distance;
+        if (distance <= _doubleClickDistanceThreshold) {
+          _clickCount++;
+        } else {
+          _clickCount = 1;
+        }
+      } else {
+        _clickCount = 1;
+      }
+
+      _lastClickTime = now;
+      _lastClickPosition = position;
+
+      _logger.d('Click count: $_clickCount at position: $position');
+    }
 
     if (mode == MouseMode.absolute) {
       // Send pixel coordinates with local view size for remote-side scaling
@@ -59,11 +93,40 @@ class MouseController {
 
   /// Handle pointer up event
   void onPointerUp(PointerUpEvent event, Size viewSize) {
+    final wasDoubleClick = _clickCount >= 2;
     _updateButtonState(event);
 
     if (mode == MouseMode.absolute) {
-      _sendMouseAbsolute(event, viewSize);
-      _sendMouseAbsolute(event, viewSize);
+      // For double-click, send down-up-down-up sequence
+      if (wasDoubleClick && event.kind == PointerDeviceKind.mouse) {
+        _logger.d('Double-click detected, sending sequence');
+        // First click up (already happened in onPointerDown)
+        _sendMouseAbsolute(event, viewSize);
+        // Small delay, then second click down
+        Future.delayed(const Duration(milliseconds: 10), () {
+          dataChannelManager.sendMouseAbs(
+            x: event.localPosition.dx,
+            y: event.localPosition.dy,
+            displayW: viewSize.width.round(),
+            displayH: viewSize.height.round(),
+            buttons: [MouseButton.left.value],
+          );
+          // Second click up
+          Future.delayed(const Duration(milliseconds: 10), () {
+            dataChannelManager.sendMouseAbs(
+              x: event.localPosition.dx,
+              y: event.localPosition.dy,
+              displayW: viewSize.width.round(),
+              displayH: viewSize.height.round(),
+              buttons: [],
+            );
+          });
+        });
+        _clickCount = 0; // Reset after double-click
+      } else {
+        _sendMouseAbsolute(event, viewSize);
+        _sendMouseAbsolute(event, viewSize);
+      }
     } else {
       dataChannelManager.sendMouseRel(
         dx: 0,

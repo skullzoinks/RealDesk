@@ -102,6 +102,8 @@ class SignalingClient {
       'type': 'register',
       'clientId': id,
       'roomId': roomId,
+      'video': true,
+      'audio': true,
       if (key != null) 'key': key,
     });
   }
