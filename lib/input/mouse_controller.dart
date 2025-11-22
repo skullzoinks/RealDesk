@@ -567,6 +567,27 @@ class MouseController {
       (positions[0].dy + positions[1].dy) / 2,
     );
   }
+
+  /// Send a specific mouse button event (down/up)
+  void sendButton(int button, bool down) {
+    final mouseButton = MouseButton.values.firstWhere(
+      (b) => b.value == button,
+      orElse: () => MouseButton.left,
+    );
+
+    if (down) {
+      _pressedButtons.add(mouseButton);
+    } else {
+      _pressedButtons.remove(mouseButton);
+    }
+
+    // Send update
+    dataChannelManager.sendMouseRel(
+      dx: 0,
+      dy: 0,
+      buttons: _pressedButtons.map((b) => b.value).toList(),
+    );
+  }
 }
 
 class _TouchInfo {

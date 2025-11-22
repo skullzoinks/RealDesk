@@ -4,9 +4,11 @@ import '../ui/pages/connect_page.dart';
 import '../ui/pages/launch_page.dart';
 import '../ui/pages/session_page.dart';
 import '../ui/pages/settings_page.dart';
+import '../ui/widgets/switch_splash_screen.dart';
 
 /// Application routes
 class AppRoutes {
+  static const String splash = '/splash';
   static const String launch = '/';
   static const String connect = '/connect';
   static const String session = '/session';
@@ -14,6 +16,9 @@ class AppRoutes {
 
   static Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
+      case splash:
+        return MaterialPageRoute(builder: (_) => const SwitchSplashScreen());
+
       case launch:
         return MaterialPageRoute(builder: (_) => const LaunchPage());
 

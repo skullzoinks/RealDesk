@@ -80,17 +80,13 @@ class KeyboardController {
   /// Get current keyboard modifiers
   KeyboardModifiers _getModifiers() {
     return KeyboardModifiers(
-      ctrl:
-          _pressedKeys.contains(services.LogicalKeyboardKey.controlLeft) ||
+      ctrl: _pressedKeys.contains(services.LogicalKeyboardKey.controlLeft) ||
           _pressedKeys.contains(services.LogicalKeyboardKey.controlRight),
-      alt:
-          _pressedKeys.contains(services.LogicalKeyboardKey.altLeft) ||
+      alt: _pressedKeys.contains(services.LogicalKeyboardKey.altLeft) ||
           _pressedKeys.contains(services.LogicalKeyboardKey.altRight),
-      shift:
-          _pressedKeys.contains(services.LogicalKeyboardKey.shiftLeft) ||
+      shift: _pressedKeys.contains(services.LogicalKeyboardKey.shiftLeft) ||
           _pressedKeys.contains(services.LogicalKeyboardKey.shiftRight),
-      meta:
-          _pressedKeys.contains(services.LogicalKeyboardKey.metaLeft) ||
+      meta: _pressedKeys.contains(services.LogicalKeyboardKey.metaLeft) ||
           _pressedKeys.contains(services.LogicalKeyboardKey.metaRight),
     );
   }
@@ -100,4 +96,28 @@ class KeyboardController {
     _pressedKeys.clear();
   }
 
+  /// Simulate a key event from virtual keyboard
+  void simulateKey(services.LogicalKeyboardKey key, bool down) {
+    if (down) {
+      _pressedKeys.add(key);
+    } else {
+      _pressedKeys.remove(key);
+    }
+
+    final modifiers = _getModifiers();
+    final keyName = KeyMapping.keyNameFor(key);
+    final code = KeyMapping.keyCodeFor(key);
+
+    dataChannelManager.sendKeyboard(
+      key: keyName,
+      down: down,
+      code: code,
+      meta: {
+        'ctrl': modifiers.ctrl,
+        'alt': modifiers.alt,
+        'shift': modifiers.shift,
+        'meta': modifiers.meta,
+      },
+    );
+  }
 }

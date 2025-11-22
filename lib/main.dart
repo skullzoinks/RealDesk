@@ -96,7 +96,8 @@ class RealDeskApp extends StatelessWidget {
             borderRadius: BorderRadius.circular(24),
             borderSide: const BorderSide(color: Color(0xFFE60012), width: 2),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
@@ -152,7 +153,8 @@ class RealDeskApp extends StatelessWidget {
             borderRadius: BorderRadius.circular(24),
             borderSide: const BorderSide(color: Color(0xFFE60012), width: 2),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
@@ -171,7 +173,7 @@ class RealDeskApp extends StatelessWidget {
         ),
       ),
       themeMode: ThemeMode.system,
-      initialRoute: AppRoutes.connect,
+      initialRoute: AppRoutes.splash,
       onGenerateRoute: AppRoutes.generateRoute,
     );
   }

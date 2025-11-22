@@ -38,6 +38,11 @@ import '../widgets/orientation_dialog.dart';
 import '../widgets/switch_loading_screen.dart';
 import '../widgets/switch_notification.dart';
 import '../widgets/switch_confirm_dialog.dart';
+import '../widgets/switch_dropdown_menu.dart';
+import '../widgets/virtual_xbox_controller.dart';
+import '../widgets/virtual_ps4_controller.dart';
+import '../widgets/virtual_keyboard.dart';
+import '../widgets/virtual_game_controls.dart';
 
 /// Remote session page with video stream and input handling
 class SessionPage extends StatefulWidget {
@@ -90,6 +95,10 @@ class _SessionPageState extends State<SessionPage> {
   String _statusMessage = '正在连接...';
   RealDeskSettings _settings = RealDeskSettings();
   bool _isFullScreen = false;
+  bool _showXboxController = false;
+  bool _showPS4Controller = false;
+  bool _showVirtualKeyboard = false;
+  String _activeGameKeyboard = 'none'; // 'none', 'cs2', 'lol'
   DisplayMode _displayMode = DisplayMode.contain;
 
   StreamSubscription<RTCDataChannelMessage>? _dataChannelSubscription;
@@ -1036,13 +1045,15 @@ class _SessionPageState extends State<SessionPage> {
 
           // Auto-switch logic for FPS games
           if (!visible && _mouseMode == MouseMode.absolute) {
-             _mouseMode = MouseMode.relative;
-             _mouseController?.toggleMode();
-             _showNotification('Entering FPS Mode (Relative Mouse)', type: SwitchNotificationType.info);
+            _mouseMode = MouseMode.relative;
+            _mouseController?.toggleMode();
+            _showNotification('Entering FPS Mode (Relative Mouse)',
+                type: SwitchNotificationType.info);
           } else if (visible && _mouseMode == MouseMode.relative) {
-             _mouseMode = MouseMode.absolute;
-             _mouseController?.toggleMode();
-             _showNotification('Exiting FPS Mode (Absolute Mouse)', type: SwitchNotificationType.info);
+            _mouseMode = MouseMode.absolute;
+            _mouseController?.toggleMode();
+            _showNotification('Exiting FPS Mode (Absolute Mouse)',
+                type: SwitchNotificationType.info);
           }
 
           _logger.i(
@@ -1232,19 +1243,21 @@ class _SessionPageState extends State<SessionPage> {
           _remoteCursorImage = image;
           _cursorHotspot = Offset(hotspotX, hotspotY);
           _remoteCursorVisible = visible;
-          
+
           // Auto-switch logic for FPS games
           if (!visible && _mouseMode == MouseMode.absolute) {
-             _mouseMode = MouseMode.relative;
-             _mouseController?.toggleMode(); // Ensure controller state matches
-             _showNotification('Entering FPS Mode (Relative Mouse)', type: SwitchNotificationType.info);
+            _mouseMode = MouseMode.relative;
+            _mouseController?.toggleMode(); // Ensure controller state matches
+            _showNotification('Entering FPS Mode (Relative Mouse)',
+                type: SwitchNotificationType.info);
           } else if (visible && _mouseMode == MouseMode.relative) {
-             // Optional: Switch back to absolute if cursor reappears?
-             // The prompt implies "until the remote server transmits mouse cursor information".
-             // If we receive a visible cursor, it means we are back to normal.
-             _mouseMode = MouseMode.absolute;
-             _mouseController?.toggleMode();
-             _showNotification('Exiting FPS Mode (Absolute Mouse)', type: SwitchNotificationType.info);
+            // Optional: Switch back to absolute if cursor reappears?
+            // The prompt implies "until the remote server transmits mouse cursor information".
+            // If we receive a visible cursor, it means we are back to normal.
+            _mouseMode = MouseMode.absolute;
+            _mouseController?.toggleMode();
+            _showNotification('Exiting FPS Mode (Absolute Mouse)',
+                type: SwitchNotificationType.info);
           }
 
           _logger.i(
@@ -1518,6 +1531,45 @@ class _SessionPageState extends State<SessionPage> {
     _setFullScreen(!_isFullScreen);
   }
 
+  void _toggleXboxController() {
+    setState(() {
+      _showXboxController = !_showXboxController;
+      if (_showXboxController) _showPS4Controller = false;
+    });
+  }
+
+  void _togglePS4Controller() {
+    setState(() {
+      _showPS4Controller = !_showPS4Controller;
+      if (_showPS4Controller) _showXboxController = false;
+    });
+  }
+
+  void _toggleVirtualKeyboard() {
+    setState(() {
+      _showVirtualKeyboard = !_showVirtualKeyboard;
+      if (_showVirtualKeyboard) _activeGameKeyboard = 'none';
+    });
+  }
+
+  void _selectGameKeyboard(String type) {
+    setState(() {
+      _activeGameKeyboard = type;
+      if (type != 'none') {
+        _showVirtualKeyboard = false;
+        _showXboxController = false;
+        _showPS4Controller = false;
+        // Switch to relative mouse mode for games if not already
+        if (_mouseMode != MouseMode.relative) {
+          _mouseMode = MouseMode.relative;
+          _mouseController?.toggleMode();
+          _showNotification('Game Mode: Mouse set to Relative',
+              type: SwitchNotificationType.info);
+        }
+      }
+    });
+  }
+
   void _disconnect() {
     showDialog(
       context: context,
@@ -1676,7 +1728,7 @@ class _SessionPageState extends State<SessionPage> {
               child: _buildRemoteSurface(),
             ),
           ),
-          
+
           // Control bar layer - positioned at bottom
           if (!_isFullScreen)
             Positioned(
@@ -1701,85 +1753,91 @@ class _SessionPageState extends State<SessionPage> {
                 ),
               ),
             ),
-            
-          // Fullscreen controls
-          if (_isFullScreen) ...[
-            // Display mode toggle button
-            Positioned(
-              top: 24,
-              right: 88,
-              child: SafeArea(
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: _cycleDisplayMode,
-                    borderRadius: BorderRadius.circular(24),
-                    child: Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF2D2D2D).withOpacity(0.9),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.1),
-                          width: 1,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.3),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        _getDisplayModeIcon(),
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                  ),
-                ),
+
+          // Virtual Controllers
+          if (_showXboxController && _gamepadController != null)
+            Positioned.fill(
+              child: VirtualXboxController(
+                controller: _gamepadController!,
               ),
             ),
-            // Full screen exit button
+          if (_showPS4Controller && _gamepadController != null)
+            Positioned.fill(
+              child: VirtualPS4Controller(
+                controller: _gamepadController!,
+              ),
+            ),
+          if (_showVirtualKeyboard && _keyboardController != null)
+            Positioned.fill(
+              child: VirtualKeyboard(
+                controller: _keyboardController!,
+                onClose: () => setState(() => _showVirtualKeyboard = false),
+              ),
+            ),
+          if (_activeGameKeyboard != 'none' &&
+              _keyboardController != null &&
+              _mouseController != null)
+            Positioned.fill(
+              child: VirtualGameControls(
+                type: _activeGameKeyboard,
+                keyboardController: _keyboardController!,
+                mouseController: _mouseController!,
+                onClose: () => setState(() => _activeGameKeyboard = 'none'),
+              ),
+            ),
+
+          // Fullscreen controls
+          if (_isFullScreen)
             Positioned(
               top: 24,
               right: 24,
               child: SafeArea(
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: _toggleFullScreen,
-                    borderRadius: BorderRadius.circular(24),
-                    child: Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE60012).withOpacity(0.9),
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFFE60012).withOpacity(0.4),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.fullscreen_exit,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                  ),
+                child: SwitchDropdownMenu(
+                  onExitFullScreen: _toggleFullScreen,
+                  onToggleDisplayMode: _cycleDisplayMode,
+                  displayModeIcon: _getDisplayModeIcon(),
+                  onToggleXbox: _toggleXboxController,
+                  onTogglePS4: _togglePS4Controller,
+                  onToggleKeyboard: _toggleVirtualKeyboard,
+                  onSelectGameKeyboard: _selectGameKeyboard,
+                  isXboxActive: _showXboxController,
+                  isPS4Active: _showPS4Controller,
+                  isKeyboardActive: _showVirtualKeyboard,
                 ),
               ),
             ),
-          ],
         ],
       ),
     );
+  }
+
+  /// Handle pointer events from virtual overlays (e.g. mouse passing through)
+  void _handleSystemPointerEvent(PointerEvent event) {
+    final viewSize = _getVideoSize();
+    final geometry = _buildMouseGeometry(viewSize);
+
+    if (event is PointerDownEvent) {
+      // Hide soft keyboard when user interacts with video surface
+      SystemChannels.textInput.invokeMethod('TextInput.hide');
+      _focusNode.requestFocus();
+      _updatePointerInside(true);
+      _recordPointerPosition(event, geometry);
+      _mouseController?.onPointerDown(event, geometry);
+    } else if (event is PointerUpEvent) {
+      _recordPointerPosition(event, geometry);
+      _mouseController?.onPointerUp(event, geometry);
+    } else if (event is PointerMoveEvent) {
+      _recordPointerPosition(event, geometry);
+      _mouseController?.onPointerMove(event, geometry);
+    } else if (event is PointerHoverEvent) {
+      _updatePointerInside(true);
+      _recordPointerPosition(event, geometry);
+      _mouseController?.onPointerHover(event, geometry);
+    } else if (event is PointerScrollEvent) {
+      _mouseController?.onPointerScroll(event);
+    } else if (event is PointerCancelEvent) {
+      _mouseController?.onPointerCancel(event);
+    }
   }
 
   Widget _buildRemoteSurface() {
@@ -1791,23 +1849,8 @@ class _SessionPageState extends State<SessionPage> {
       content = RepaintBoundary(
         child: Listener(
           behavior: HitTestBehavior.opaque,
-          onPointerDown: (event) {
-            // Hide soft keyboard when user interacts with video surface
-            SystemChannels.textInput.invokeMethod('TextInput.hide');
-            _focusNode.requestFocus();
-
-            final viewSize = _getVideoSize();
-            final geometry = _buildMouseGeometry(viewSize);
-            _updatePointerInside(true);
-            _recordPointerPosition(event, geometry);
-            _mouseController?.onPointerDown(event, geometry);
-          },
-          onPointerUp: (event) {
-            final viewSize = _getVideoSize();
-            final geometry = _buildMouseGeometry(viewSize);
-            _recordPointerPosition(event, geometry);
-            _mouseController?.onPointerUp(event, geometry);
-          },
+          onPointerDown: (event) => _handleSystemPointerEvent(event),
+          onPointerUp: (event) => _handleSystemPointerEvent(event),
           onPointerMove: (event) {
             // Throttle pointer events to reduce CPU/Network usage
             final now = DateTime.now();
@@ -1819,11 +1862,7 @@ class _SessionPageState extends State<SessionPage> {
               return;
             }
             _lastPointerEventTime = now;
-
-            final viewSize = _getVideoSize();
-            final geometry = _buildMouseGeometry(viewSize);
-            _recordPointerPosition(event, geometry);
-            _mouseController?.onPointerMove(event, geometry);
+            _handleSystemPointerEvent(event);
           },
           onPointerHover: (event) {
             // Throttle pointer events
@@ -1836,21 +1875,10 @@ class _SessionPageState extends State<SessionPage> {
               return;
             }
             _lastPointerEventTime = now;
-
-            final viewSize = _getVideoSize();
-            final geometry = _buildMouseGeometry(viewSize);
-            _updatePointerInside(true);
-            _recordPointerPosition(event, geometry);
-            _mouseController?.onPointerHover(event, geometry);
+            _handleSystemPointerEvent(event);
           },
-          onPointerSignal: (event) {
-            if (event is PointerScrollEvent) {
-              _mouseController?.onPointerScroll(event);
-            }
-          },
-          onPointerCancel: (event) {
-            _mouseController?.onPointerCancel(event);
-          },
+          onPointerSignal: (event) => _handleSystemPointerEvent(event),
+          onPointerCancel: (event) => _handleSystemPointerEvent(event),
           child: Focus(
             focusNode: _focusNode,
             autofocus: true,
@@ -1962,7 +1990,8 @@ class _SessionPageState extends State<SessionPage> {
 
   _NotificationData? _currentNotification;
 
-  void _showNotification(String message, {SwitchNotificationType type = SwitchNotificationType.info}) {
+  void _showNotification(String message,
+      {SwitchNotificationType type = SwitchNotificationType.info}) {
     setState(() {
       _currentNotification = _NotificationData(message, type);
     });
