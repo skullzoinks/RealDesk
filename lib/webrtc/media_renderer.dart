@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:logger/logger.dart';
@@ -8,6 +9,7 @@ class RemoteMediaRenderer extends StatefulWidget {
     required this.stream,
     this.objectFit = RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
     this.mirror = false,
+    this.filterQuality = FilterQuality.medium,
     this.onFirstFrame,
     this.onVideoSizeChanged,
     Key? key,
@@ -16,6 +18,7 @@ class RemoteMediaRenderer extends StatefulWidget {
   final MediaStream? stream;
   final RTCVideoViewObjectFit objectFit;
   final bool mirror;
+  final FilterQuality filterQuality;
   final VoidCallback? onFirstFrame;
   final void Function(int width, int height)? onVideoSizeChanged;
 
@@ -29,6 +32,8 @@ class _RemoteMediaRendererState extends State<RemoteMediaRenderer> {
   bool _initialized = false;
   int _lastVideoWidth = 0;
   int _lastVideoHeight = 0;
+  String? _lastStreamId;
+  int _videoTrackCount = 0;
 
   @override
   void initState() {
@@ -39,7 +44,24 @@ class _RemoteMediaRendererState extends State<RemoteMediaRenderer> {
   @override
   void didUpdateWidget(RemoteMediaRenderer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.stream != oldWidget.stream) {
+
+    // Check if stream reference changed
+    final streamChanged = widget.stream != oldWidget.stream;
+
+    // Check if stream ID changed (even if reference is same)
+    final streamIdChanged = widget.stream?.id != _lastStreamId;
+
+    // Check if video track count changed
+    final currentTrackCount = widget.stream?.getVideoTracks().length ?? 0;
+    final trackCountChanged = currentTrackCount != _videoTrackCount;
+
+    if (streamChanged || streamIdChanged || trackCountChanged) {
+      _logger.i(
+        'Stream update detected: '
+        'refChanged=$streamChanged, idChanged=$streamIdChanged, '
+        'trackCountChanged=$trackCountChanged '
+        '(${_videoTrackCount} -> $currentTrackCount)',
+      );
       _updateStream();
     }
   }
@@ -61,11 +83,53 @@ class _RemoteMediaRendererState extends State<RemoteMediaRenderer> {
   void _updateStream() {
     if (!_initialized) return;
 
-    _renderer.srcObject = widget.stream;
-    if (widget.stream != null) {
-      _logger.i('Stream attached to renderer');
-      widget.onFirstFrame?.call();
+    final stream = widget.stream;
+    final streamId = stream?.id;
+    final videoTracks = stream?.getVideoTracks() ?? [];
+
+    // Update tracking variables
+    _lastStreamId = streamId;
+    _videoTrackCount = videoTracks.length;
+
+    // Force unbind and rebind to ensure renderer picks up changes
+    // This is critical for handling reconnection scenarios
+    if (_renderer.srcObject != null && stream != null) {
+      _logger.i('Unbinding old stream before rebinding');
+      _renderer.srcObject = null;
+      // Small delay to ensure clean unbind
+      Future.delayed(const Duration(milliseconds: 50), () {
+        if (mounted) {
+          _renderer.srcObject = stream;
+          _logger.i(
+            'Stream rebound to renderer: id=$streamId, '
+            'videoTracks=${videoTracks.length}',
+          );
+        }
+      });
+    } else {
+      _renderer.srcObject = stream;
+      if (stream != null) {
+        // Reduced logging for performance
+      } else {
+        _logger.i('Stream cleared from renderer');
+      }
     }
+
+    if (stream != null) {
+      widget.onFirstFrame?.call();
+
+      // Reduced logging for performance in release builds
+      if (kDebugMode) {
+        // Log track details for debugging
+        for (var track in videoTracks) {
+          _logger.i(
+            '  Video track: ${track.id}, enabled=${track.enabled}, '
+            'kind=${track.kind}',
+          );
+        }
+      }
+    }
+
     _handleRendererValueChanged();
   }
 
@@ -108,10 +172,14 @@ class _RemoteMediaRendererState extends State<RemoteMediaRenderer> {
       );
     }
 
-    return RTCVideoView(
-      _renderer,
-      objectFit: widget.objectFit,
-      mirror: widget.mirror,
+    // Use RepaintBoundary to isolate video rendering from parent widget rebuilds
+    return RepaintBoundary(
+      child: RTCVideoView(
+        _renderer,
+        objectFit: widget.objectFit,
+        mirror: widget.mirror,
+        filterQuality: widget.filterQuality,
+      ),
     );
   }
 }

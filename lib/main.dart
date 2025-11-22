@@ -10,6 +10,20 @@ Future<void> main() async {
 
   if (_isDesktopPlatform()) {
     await windowManager.ensureInitialized();
+
+    // Set initial window size
+    const windowOptions = WindowOptions(
+      size: Size(1600, 900),
+      center: true,
+      backgroundColor: Colors.transparent,
+      skipTaskbar: false,
+      titleBarStyle: TitleBarStyle.normal,
+    );
+
+    await windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
   }
 
   // Set preferred orientations

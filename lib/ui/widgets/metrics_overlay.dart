@@ -71,6 +71,22 @@ class MetricsOverlay extends StatelessWidget {
                 '丢包率',
                 '${metrics.packetLoss.toStringAsFixed(2)}%',
               ),
+              _buildMetricRow(
+                '编码方式',
+                metrics.codec.isNotEmpty ? metrics.codec : '未知',
+              ),
+              _buildMetricRow(
+                '本地ICE服务器',
+                metrics.localIceServer.isNotEmpty
+                    ? metrics.localIceServer
+                    : '未连接',
+              ),
+              _buildMetricRow(
+                '远程ICE服务器',
+                metrics.remoteIceServer.isNotEmpty
+                    ? metrics.remoteIceServer
+                    : '未连接',
+              ),
               _buildMetricRow('已接收帧', '${metrics.framesReceived}'),
               _buildMetricRow('丢失帧', '${metrics.framesDropped}'),
             ],
@@ -139,4 +155,3 @@ class MetricsOverlay extends StatelessWidget {
     }
   }
 }
-

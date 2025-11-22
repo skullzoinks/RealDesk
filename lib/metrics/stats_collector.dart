@@ -9,7 +9,8 @@ import 'qos_models.dart';
 class StatsCollector {
   StatsCollector({
     required this.peerConnection,
-    this.collectInterval = const Duration(seconds: 1),
+    this.collectInterval =
+        const Duration(seconds: 2), // Increased from 1s to 2s
   }) : _logger = Logger();
 
   final RTCPeerConnection peerConnection;
@@ -64,6 +65,10 @@ class StatsCollector {
 
   /// Parse raw stats into QoS metrics
   QoSMetrics _parseStats(List<StatsReport> stats) {
+    final reportsById = <String, StatsReport>{
+      for (final report in stats) report.id: report,
+    };
+
     double fps = 0.0;
     int videoBitrate = 0;
     int audioBitrate = 0;
@@ -72,6 +77,10 @@ class StatsCollector {
     double packetLoss = 0.0;
     int framesReceivedMetric = 0;
     int framesDroppedMetric = 0;
+    String videoCodec = '';
+    String audioCodec = '';
+    String localIceServer = '';
+    String remoteIceServer = '';
 
     double fpsMetricSum = 0.0;
     int fpsMetricCount = 0;
@@ -98,6 +107,22 @@ class StatsCollector {
             (report.timestamp as num?)?.toDouble() ?? 0.0;
         final bytesReceived = _parseInt(values['bytesReceived']);
 
+        final codecId = values['codecId']?.toString();
+        final StatsReport? codecReport =
+            codecId != null ? reportsById[codecId] : null;
+        final codecValues = codecReport?.values ?? values;
+        final resolvedCodec = _resolveCodecLabel(
+          codecValues,
+          preferredPayload: codecValues['payloadType'] ?? values['payloadType'],
+        );
+        if (resolvedCodec.isNotEmpty) {
+          if (mediaType == 'video') {
+            videoCodec = resolvedCodec;
+          } else if (mediaType == 'audio' && videoCodec.isEmpty) {
+            audioCodec = resolvedCodec;
+          }
+        }
+
         if (mediaType == 'video') {
           final framesReceivedCurrent = _parseInt(values['framesReceived']);
           final framesDroppedCurrent = _parseInt(values['framesDropped']);
@@ -122,7 +147,9 @@ class StatsCollector {
                   previous.timestampMs,
                 );
 
-          if (previous != null && intervalSeconds != null && intervalSeconds > 0) {
+          if (previous != null &&
+              intervalSeconds != null &&
+              intervalSeconds > 0) {
             final bytesDiff = bytesReceived - previous.bytesReceived;
             if (bytesDiff >= 0) {
               videoBitrateSum += (bytesDiff * 8) / intervalSeconds;
@@ -180,6 +207,27 @@ class StatsCollector {
         final state = values['state'] as String?;
         if (state == 'succeeded') {
           rtt = (_parseDouble(values['currentRoundTripTime']) * 1000).round();
+
+          if (localIceServer.isEmpty) {
+            final localCandidateId = values['localCandidateId']?.toString();
+            final StatsReport? localCandidate =
+                localCandidateId != null ? reportsById[localCandidateId] : null;
+            if (localCandidate != null) {
+              localIceServer =
+                  _formatCandidateDescription(localCandidate.values);
+            }
+          }
+
+          if (remoteIceServer.isEmpty) {
+            final remoteCandidateId = values['remoteCandidateId']?.toString();
+            final StatsReport? remoteCandidate = remoteCandidateId != null
+                ? reportsById[remoteCandidateId]
+                : null;
+            if (remoteCandidate != null) {
+              remoteIceServer =
+                  _formatCandidateDescription(remoteCandidate.values);
+            }
+          }
         }
       }
     }
@@ -212,6 +260,19 @@ class StatsCollector {
       packetLoss = (totalPacketsLost / totalPackets) * 100;
     }
 
+    String codec = videoCodec.isNotEmpty
+        ? videoCodec
+        : (audioCodec.isNotEmpty ? audioCodec : '');
+    if (codec.isEmpty) {
+      codec = _lastMetrics.codec;
+    }
+    if (localIceServer.isEmpty) {
+      localIceServer = _lastMetrics.localIceServer;
+    }
+    if (remoteIceServer.isEmpty) {
+      remoteIceServer = _lastMetrics.remoteIceServer;
+    }
+
     return QoSMetrics(
       fps: fps,
       videoBitrate: videoBitrate,
@@ -221,6 +282,9 @@ class StatsCollector {
       packetLoss: packetLoss,
       framesReceived: framesReceivedMetric,
       framesDropped: framesDroppedMetric,
+      codec: codec,
+      localIceServer: localIceServer,
+      remoteIceServer: remoteIceServer,
     );
   }
 
@@ -259,6 +323,76 @@ class StatsCollector {
   void dispose() {
     stop();
     _metricsController.close();
+  }
+
+  String _resolveCodecLabel(Map<dynamic, dynamic>? values,
+      {dynamic preferredPayload}) {
+    if (values == null) {
+      return '';
+    }
+
+    final String mime =
+        (values['mimeType'] ?? values['codec'] ?? '').toString().trim();
+    final String payloadType =
+        (preferredPayload ?? values['payloadType'] ?? '').toString().trim();
+    final String fmtp =
+        (values['sdpFmtpLine'] ?? values['parameters'] ?? '').toString().trim();
+
+    final parts = <String>[];
+    if (mime.isNotEmpty) {
+      parts.add(mime);
+    }
+    if (payloadType.isNotEmpty) {
+      parts.add('PT:$payloadType');
+    }
+    if (fmtp.isNotEmpty) {
+      parts.add(fmtp);
+    }
+
+    return parts.join(' ');
+  }
+
+  String _formatCandidateDescription(Map<dynamic, dynamic>? values) {
+    if (values == null) {
+      return '';
+    }
+
+    final address =
+        (values['address'] ?? values['ip'] ?? values['addressSource'])
+            ?.toString()
+            .trim();
+    final port = (values['port'] ?? values['portNumber'])?.toString().trim();
+    final protocol = values['protocol']?.toString().trim().toUpperCase() ?? '';
+    final candidateType =
+        values['candidateType']?.toString().trim().toLowerCase() ?? '';
+
+    final buffer = StringBuffer();
+    if (address != null && address.isNotEmpty) {
+      buffer.write(address);
+      if (port != null && port.isNotEmpty) {
+        buffer.write(':');
+        buffer.write(port);
+      }
+    }
+
+    final metadata = <String>[];
+    if (protocol.isNotEmpty) {
+      metadata.add(protocol);
+    }
+    if (candidateType.isNotEmpty) {
+      metadata.add(candidateType);
+    }
+
+    if (metadata.isNotEmpty) {
+      if (buffer.isNotEmpty) {
+        buffer.write(' ');
+      }
+      buffer.write('(');
+      buffer.write(metadata.join(', '));
+      buffer.write(')');
+    }
+
+    return buffer.toString();
   }
 }
 

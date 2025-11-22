@@ -14,9 +14,14 @@ import 'package:window_manager/window_manager.dart';
 import '../../input/gamepad_controller.dart';
 import '../../input/keyboard_controller.dart';
 import '../../input/mouse_controller.dart';
+import '../../input/mouse_geometry.dart';
 import '../../input/input_injector.dart';
 import '../../input/schema/input_messages.dart';
+import '../../input/schema/remote_input.pb.dart' as pb;
 import '../../metrics/stats_collector.dart';
+import '../../metrics/qos_congestion_controller.dart';
+import '../../metrics/qos_data_manager.dart';
+import '../../models/display_mode.dart';
 import '../../signaling/signaling_client.dart';
 import '../../signaling/models/signaling_messages.dart' as signaling;
 import '../../webrtc/android_screen_capturer.dart';
@@ -56,6 +61,10 @@ class _SessionPageState extends State<SessionPage> {
     descendantsAreFocusable: false,
   );
 
+  // Performance optimization: throttle pointer events
+  DateTime _lastPointerEventTime = DateTime.now();
+  static const _pointerEventThrottleMs = 8; // ~120Hz max
+
   late SignalingClient _signalingClient;
   late PeerManager _peerManager;
   final AndroidScreenCapturer _androidScreenCapturer = AndroidScreenCapturer();
@@ -65,6 +74,9 @@ class _SessionPageState extends State<SessionPage> {
   KeyboardController? _keyboardController;
   GamepadController? _gamepadController;
   StatsCollector? _statsCollector;
+  QoSCongestionController? _qosController;
+  QoSDataChannelManager? _qosDataManager;
+  QoSIntegrationHelper? _qosIntegration;
   AudioRenderer? _audioRenderer;
   InputInjector? _inputInjector;
 
@@ -75,6 +87,7 @@ class _SessionPageState extends State<SessionPage> {
   String _statusMessage = '正在连接...';
   RealDeskSettings _settings = RealDeskSettings();
   bool _isFullScreen = false;
+  DisplayMode _displayMode = DisplayMode.contain;
 
   StreamSubscription<RTCDataChannelMessage>? _dataChannelSubscription;
   ui.Image? _remoteCursorImage;
@@ -86,15 +99,36 @@ class _SessionPageState extends State<SessionPage> {
   Size _remoteVideoSize = Size.zero;
 
   bool get _shouldShowRemoteCursor =>
+      _mouseMode == MouseMode.absolute &&
       _remoteCursorImage != null &&
       _remoteCursorVisible &&
       _isPointerInsideVideo;
+
+  // 在FPS模式或有远程光标时隐藏本地光标
+  bool get _shouldHideLocalCursor {
+    if (_isPointerInsideVideo && _mouseMode == MouseMode.relative) {
+      return true;
+    }
+    return _remoteCursorImage != null && _isPointerInsideVideo;
+  }
 
   bool get _supportsNativeFullScreen =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.windows ||
           defaultTargetPlatform == TargetPlatform.macOS ||
           defaultTargetPlatform == TargetPlatform.linux);
+
+  /// Get filter quality based on settings
+  FilterQuality get _videoFilterQuality {
+    switch (_settings.videoRenderQuality) {
+      case VideoRenderQuality.low:
+        return FilterQuality.low;
+      case VideoRenderQuality.medium:
+        return FilterQuality.medium;
+      case VideoRenderQuality.high:
+        return FilterQuality.high;
+    }
+  }
 
   @override
   void initState() {
@@ -123,6 +157,7 @@ class _SessionPageState extends State<SessionPage> {
       signalingUrl: widget.signalingUrl,
       reconnectDelay: Duration(seconds: _settings.reconnectDelaySeconds),
       maxReconnectAttempts: _settings.maxReconnectAttempts,
+      allowInsecure: _settings.insecure,
     );
     _signalingClient.messageStream.listen(_onSignalingMessage);
     _signalingClient.stateStream.listen(_onSignalingStateChanged);
@@ -138,6 +173,7 @@ class _SessionPageState extends State<SessionPage> {
     _peerManager.remoteStream.listen(_onRemoteStream);
     _peerManager.iceCandidate.listen(_onIceCandidate);
     _peerManager.connectionState.listen(_onConnectionStateChanged);
+    _peerManager.iceConnectionState.listen(_onIceConnectionStateChanged);
     _peerManager.dataChannelState.listen(_onDataChannelStateChanged);
 
     // Connect WS and send Ayame register
@@ -236,9 +272,6 @@ class _SessionPageState extends State<SessionPage> {
       dataChannelManager: _dataChannelManager!,
       mode: _mouseMode,
     );
-    if (_remoteVideoSize.width > 0 && _remoteVideoSize.height > 0) {
-      _mouseController!.updateRemoteVideoSize(_remoteVideoSize);
-    }
     _keyboardController = KeyboardController(
       dataChannelManager: _dataChannelManager!,
     );
@@ -295,6 +328,12 @@ class _SessionPageState extends State<SessionPage> {
       return;
     }
     if (_peerManager.peerConnection == null) {
+      return;
+    }
+
+    // Check if local media sending is enabled
+    if (!_settings.sendLocalMedia) {
+      _logger.i('Local media sending is disabled in settings');
       return;
     }
 
@@ -483,16 +522,248 @@ class _SessionPageState extends State<SessionPage> {
     });
   }
 
-  void _onDataChannelStateChanged(RTCDataChannelState state) {
-    _logger.i('Data channel state: $state');
+  void _onIceConnectionStateChanged(RTCIceConnectionState state) {
+    _logger.i('ICE connection state: $state');
+
+    // Show user-friendly status messages for ICE state changes
+    String? message;
+    switch (state) {
+      case RTCIceConnectionState.RTCIceConnectionStateChecking:
+        message = '正在建立连接...';
+        break;
+      case RTCIceConnectionState.RTCIceConnectionStateConnected:
+      case RTCIceConnectionState.RTCIceConnectionStateCompleted:
+        message = '连接成功';
+        // Stream refresh is handled by RemoteMediaRenderer internally
+        // Removed unnecessary setState to reduce CPU usage
+        _logger.i('ICE reconnected - stream will refresh automatically');
+        break;
+      case RTCIceConnectionState.RTCIceConnectionStateDisconnected:
+        message = '连接中断，正在尝试重连...';
+        break;
+      case RTCIceConnectionState.RTCIceConnectionStateFailed:
+        message = '连接失败，请检查网络';
+        break;
+      case RTCIceConnectionState.RTCIceConnectionStateClosed:
+        message = '连接已关闭';
+        break;
+      default:
+        break;
+    }
+
+    if (message != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
-  void _onDataChannelMessage(RTCDataChannelMessage message) {
-    if (message.isBinary) {
-      // 当前版本主要处理 JSON 文本消息
+  void _onDataChannelStateChanged(RTCDataChannelState state) {
+    _logger.i('Data channel state: $state');
+
+    if (state == RTCDataChannelState.RTCDataChannelOpen) {
+      unawaited(_initializeQoSSystem());
+    } else if (state == RTCDataChannelState.RTCDataChannelClosed) {
+      _shutdownQoSSystem();
+    }
+  }
+
+  /// Initialize QoS congestion control system
+  Future<void> _initializeQoSSystem() async {
+    if (!_settings.enableQoS) {
+      _logger.d('QoS disabled in settings; skipping initialization');
       return;
     }
 
+    if (_qosController != null) {
+      _logger.d('QoS system already initialized');
+      return;
+    }
+
+    final connection = _peerManager.peerConnection;
+    final statsCollector = _statsCollector;
+
+    if (connection == null || statsCollector == null) {
+      _logger.w(
+          'Cannot initialize QoS: missing peer connection or stats collector');
+      return;
+    }
+
+    try {
+      final config = QoSConfig(
+        pollIntervalMs: statsCollector.collectInterval.inMilliseconds,
+        highLossPercentage: _settings.qosHighLossPercentage,
+        highRttMs: _settings.qosHighRttMs,
+        highJitterMs: _settings.qosHighJitterMs,
+        increaseStep: _settings.qosBitrateIncreaseStep,
+        decreaseStep: _settings.qosBitrateDecreaseStep,
+        healthySamplesRequired: _settings.qosHealthySamplesRequired,
+        maxBitrateBps: _settings.qosMaxBitrate * 1000,
+        minBitrateBps: _settings.qosMinBitrate * 1000,
+      );
+
+      _qosController = QoSCongestionController(
+        statsCollector: statsCollector,
+        config: config,
+        onBitrateAdjustment: _handleBitrateAdjustment,
+        onMetricsUpdate: _handleQoSMetricsUpdate,
+      );
+
+      _qosDataManager = QoSDataChannelManager(
+        peerConnection: connection,
+        onMessage: _handleQoSMessage,
+      );
+
+      _qosIntegration = QoSIntegrationHelper(
+        congestionController: _qosController!,
+        dataChannelManager: _qosDataManager!,
+      );
+
+      await _qosDataManager!.initialize();
+      _qosIntegration!.start();
+      _qosController!.start();
+      _logger.i('QoS system initialized successfully');
+    } catch (e, stackTrace) {
+      _logger.w(
+        'Failed to initialize QoS system: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      _shutdownQoSSystem();
+    }
+  }
+
+  /// Shutdown QoS system
+  void _shutdownQoSSystem() {
+    _qosController?.stop();
+    _qosIntegration?.stop();
+    _qosDataManager?.close();
+
+    _qosController = null;
+    _qosIntegration = null;
+    _qosDataManager = null;
+
+    _logger.i('QoS system shutdown');
+  }
+
+  /// Handle bitrate adjustment from QoS controller
+  void _handleBitrateAdjustment(int minBitrate, int maxBitrate) {
+    _logger.i(
+        'Applying bitrate adjustment request: min=$minBitrate, max=$maxBitrate');
+
+    // Notify remote host via QoS data channel so it can adjust encoder bitrate
+    _qosDataManager?.sendBitrateCommand(
+      maxBitrate,
+      minBitrate: minBitrate,
+      maxBitrate: maxBitrate,
+    );
+  }
+
+  /// Handle QoS metrics updates
+  void _handleQoSMetricsUpdate(EnhancedQoSMetrics metrics) {
+    _qosIntegration?.forwardMetrics(metrics);
+  }
+
+  /// Handle incoming QoS messages from remote
+  void _handleQoSMessage(QoSMessage message) {
+    _qosIntegration?.handleQoSMessage(message);
+  }
+
+  /// Change video codec preference and renegotiate connection
+  Future<void> changeVideoCodec(String codec) async {
+    if (!_isConnected) {
+      _logger.w('Cannot change codec: not connected');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未连接,无法切换编码格式')),
+        );
+      }
+      return;
+    }
+
+    try {
+      _logger.i('Changing video codec to: $codec');
+      await _peerManager.setPreferredCodec(codec, renegotiate: false);
+
+      // Create new offer with updated codec preference
+      final offer = await _peerManager.createOffer();
+
+      // Send offer through signaling
+      _signalingClient.sendOffer(offer.sdp!);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('正在切换到 $codec 编码...')),
+        );
+      }
+
+      _logger.i('Codec change offer sent, waiting for answer');
+    } catch (e, stackTrace) {
+      _logger.e(
+        'Failed to change codec: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('切换编码失败: $e')),
+        );
+      }
+    }
+  }
+
+  /// Manually restart ICE connection
+  Future<void> restartIceConnection() async {
+    if (_peerManager.peerConnection == null) {
+      _logger.w('Cannot restart ICE: peer connection not available');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('连接不可用')),
+        );
+      }
+      return;
+    }
+
+    try {
+      _logger.i('Manually restarting ICE connection');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('正在重新建立连接...')),
+        );
+      }
+
+      final offer = await _peerManager.restartIce();
+      if (offer != null && offer.sdp != null) {
+        _signalingClient.sendOffer(offer.sdp!);
+        _logger.i('ICE restart offer sent');
+      } else {
+        throw Exception('Failed to create ICE restart offer');
+      }
+    } catch (e, stackTrace) {
+      _logger.e(
+        'Failed to restart ICE: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('重连失败: $e')),
+        );
+      }
+    }
+  }
+
+  void _onDataChannelMessage(RTCDataChannelMessage message) {
+    // Handle Protobuf binary messages
+    if (message.isBinary) {
+      _handleProtobufMessage(message.binary);
+      return;
+    }
+
+    // Handle JSON text messages
     final text = message.text;
     if (text.isEmpty) {
       return;
@@ -546,6 +817,49 @@ class _SessionPageState extends State<SessionPage> {
     }
   }
 
+  /// Handle incoming Protobuf binary messages
+  void _handleProtobufMessage(Uint8List data) {
+    try {
+      final envelope = pb.Envelope.fromBuffer(data);
+      final payload = envelope.whichPayload();
+
+      switch (payload) {
+        case pb.Envelope_Payload.cursorImage:
+          _handleCursorImageProtobuf(envelope.cursorImage);
+          break;
+        case pb.Envelope_Payload.mouseAbs:
+          _handleMouseAbsoluteProtobuf(envelope.mouseAbs);
+          break;
+        case pb.Envelope_Payload.mouseRel:
+          _handleMouseRelativeProtobuf(envelope.mouseRel);
+          break;
+        case pb.Envelope_Payload.mouseWheel:
+          _handleMouseWheelProtobuf(envelope.mouseWheel);
+          break;
+        case pb.Envelope_Payload.keyboard:
+          _handleKeyboardProtobuf(envelope.keyboard);
+          break;
+        case pb.Envelope_Payload.gamepadFeedback:
+          _handleGamepadFeedbackProtobuf(envelope.gamepadFeedback);
+          break;
+        case pb.Envelope_Payload.imeState:
+          // IME state not yet implemented
+          _logger.d('收到 IME 状态消息 (未实现)');
+          break;
+        case pb.Envelope_Payload.gamepadXInput:
+        case pb.Envelope_Payload.gamepadConnection:
+          // These are outgoing messages from controller to controlled
+          _logger.d('收到游戏手柄消息 (不应该从远程收到)');
+          break;
+        case pb.Envelope_Payload.notSet:
+          _logger.w('收到空的 Protobuf 消息');
+          break;
+      }
+    } catch (e) {
+      _logger.w('解析 Protobuf 消息失败: $e');
+    }
+  }
+
   /// Handle incoming mouse absolute position event
   void _handleMouseAbsoluteMessage(Map<String, dynamic> payload) {
     final x = (payload['x'] as num?)?.toDouble();
@@ -566,6 +880,11 @@ class _SessionPageState extends State<SessionPage> {
       displayH: displayH,
       buttons: buttons,
     );
+
+    // In relative mode, update cursor position from remote absolute position
+    if (_mouseMode == MouseMode.relative) {
+      _updateCursorPositionFromRemote(x, y, displayW, displayH);
+    }
   }
 
   /// Handle incoming mouse relative movement event
@@ -650,10 +969,193 @@ class _SessionPageState extends State<SessionPage> {
     );
   }
 
+  // ========== Protobuf Message Handlers ==========
+
+  /// Handle incoming cursor image (Protobuf format)
+  void _handleCursorImageProtobuf(pb.CursorImage cursor) {
+    final width = cursor.w;
+    final height = cursor.h;
+    final rgba = cursor.rgba;
+
+    _logger.i(
+        '收到光标图像消息 [Protobuf]: width=$width, height=$height, dataLength=${rgba.length}');
+
+    if (width <= 0 || height <= 0 || rgba.isEmpty) {
+      _logger.w('收到的 cursorImage 消息字段缺失或非法 [Protobuf]');
+      return;
+    }
+
+    final expectedLength = width * height * 4;
+    if (rgba.length < expectedLength) {
+      _logger.w(
+          'cursorImage 数据长度不足 [Protobuf]: 实际 ${rgba.length} 字节, 期望 $expectedLength');
+      return;
+    }
+
+    final hotspotX = cursor.hotspotX.toDouble();
+    final hotspotY = cursor.hotspotY.toDouble();
+    final visible = cursor.hasVisible() ? cursor.visible : true;
+
+    final version = ++_cursorImageVersion;
+
+    try {
+      // Protobuf uses RGBA, need to convert to BGRA for Flutter
+      final bgra = Uint8List(rgba.length);
+      for (int i = 0; i < rgba.length; i += 4) {
+        bgra[i] = rgba[i + 2]; // B
+        bgra[i + 1] = rgba[i + 1]; // G
+        bgra[i + 2] = rgba[i]; // R
+        bgra[i + 3] = rgba[i + 3]; // A
+      }
+
+      ui.decodeImageFromPixels(bgra, width, height, ui.PixelFormat.bgra8888, (
+        ui.Image image,
+      ) {
+        if (!mounted) {
+          image.dispose();
+          return;
+        }
+
+        if (version != _cursorImageVersion) {
+          image.dispose();
+          return;
+        }
+
+        final previous = _remoteCursorImage;
+
+        setState(() {
+          _remoteCursorImage = image;
+          _cursorHotspot = Offset(hotspotX, hotspotY);
+          _remoteCursorVisible = visible;
+          _logger.i(
+              '光标图像已设置 [Protobuf]: ${image.width}x${image.height}, hotspot=($hotspotX,$hotspotY), visible=$visible');
+        });
+
+        previous?.dispose();
+      }, rowBytes: width * 4);
+    } catch (e) {
+      _logger.w('cursorImage 像素解码失败 [Protobuf]: $e');
+    }
+  }
+
+  /// Handle incoming mouse absolute position (Protobuf format)
+  void _handleMouseAbsoluteProtobuf(pb.MouseAbs mouseAbs) {
+    final x = mouseAbs.x;
+    final y = mouseAbs.y;
+    final displayW = mouseAbs.displayW;
+    final displayH = mouseAbs.displayH;
+    final buttons = mouseAbs.btns.bits;
+
+    _inputInjector?.injectMouseAbsolute(
+      x: x,
+      y: y,
+      displayW: displayW,
+      displayH: displayH,
+      buttons: buttons,
+    );
+
+    // In relative mode, update cursor position from remote absolute position
+    if (_mouseMode == MouseMode.relative) {
+      _updateCursorPositionFromRemote(x, y, displayW, displayH);
+    }
+  }
+
+  /// Handle incoming mouse relative movement (Protobuf format)
+  void _handleMouseRelativeProtobuf(pb.MouseRel mouseRel) {
+    final dx = mouseRel.dx;
+    final dy = mouseRel.dy;
+    final buttons = mouseRel.btns.bits;
+
+    _inputInjector?.injectMouseRelative(
+      dx: dx,
+      dy: dy,
+      buttons: buttons,
+    );
+  }
+
+  /// Handle incoming mouse wheel/scroll (Protobuf format)
+  void _handleMouseWheelProtobuf(pb.MouseWheel mouseWheel) {
+    final dx = mouseWheel.dx;
+    final dy = mouseWheel.dy;
+
+    _inputInjector?.injectMouseWheel(dx: dx, dy: dy);
+  }
+
+  /// Handle incoming keyboard event (Protobuf format)
+  void _handleKeyboardProtobuf(pb.Keyboard keyboard) {
+    final key = keyboard.key;
+    final code = keyboard.code;
+    final down = keyboard.down;
+    final mods = keyboard.mods;
+
+    _inputInjector?.injectKeyboard(
+      key: key,
+      code: code,
+      down: down,
+      mods: mods,
+    );
+  }
+
+  /// Handle incoming gamepad feedback (Protobuf format)
+  void _handleGamepadFeedbackProtobuf(pb.GamepadFeedback feedback) {
+    final index = feedback.index;
+    final large = feedback.largeMotor;
+    final small = feedback.smallMotor;
+    final ledCode = feedback.hasLedCode() ? feedback.ledCode : -1;
+
+    _gamepadController?.handleFeedback(
+      index: index,
+      largeMotor: large,
+      smallMotor: small,
+      ledCode: ledCode,
+    );
+  }
+
+  /// Update cursor position from remote absolute coordinates
+  /// Used in relative mode to display cursor at the position sent by remote
+  void _updateCursorPositionFromRemote(
+    double remoteX,
+    double remoteY,
+    int remoteDisplayW,
+    int remoteDisplayH,
+  ) {
+    if (!mounted) {
+      return;
+    }
+
+    final viewSize = _getVideoSize();
+    final geometry = _buildMouseGeometry(viewSize);
+    if (viewSize.isEmpty || !geometry.hasVideoContent) {
+      return;
+    }
+
+    final newPosition = geometry.mapRemoteToLocal(
+      remoteX: remoteX,
+      remoteY: remoteY,
+      displayW: remoteDisplayW > 0 ? remoteDisplayW.toDouble() : null,
+      displayH: remoteDisplayH > 0 ? remoteDisplayH.toDouble() : null,
+    );
+
+    // Only update if position changed significantly (reduce CPU usage)
+    final dx = newPosition.dx - _pointerPosition.dx;
+    final dy = newPosition.dy - _pointerPosition.dy;
+    if ((dx * dx + dy * dy) < 1.0) {
+      return;
+    }
+
+    setState(() {
+      _pointerPosition = newPosition;
+      _isPointerInsideVideo = true; // Ensure cursor is visible
+    });
+  }
+
   void _handleCursorImageMessage(Map<String, dynamic> payload) {
     final width = (payload['w'] as num?)?.toInt();
     final height = (payload['h'] as num?)?.toInt();
     final data = payload['data'] as String?;
+
+    _logger.i(
+        '收到光标图像消息: width=$width, height=$height, dataLength=${data?.length ?? 0}');
 
     if (width == null ||
         height == null ||
@@ -710,6 +1212,8 @@ class _SessionPageState extends State<SessionPage> {
           _remoteCursorImage = image;
           _cursorHotspot = Offset(hotspotX, hotspotY);
           _remoteCursorVisible = visible;
+          _logger.i(
+              '光标图像已设置: ${image.width}x${image.height}, hotspot=($hotspotX,$hotspotY), visible=$visible');
         });
 
         previous?.dispose();
@@ -727,7 +1231,6 @@ class _SessionPageState extends State<SessionPage> {
     if (_remoteVideoSize == newSize) {
       return;
     }
-    _mouseController?.updateRemoteVideoSize(newSize);
     if (!mounted) {
       return;
     }
@@ -760,36 +1263,6 @@ class _SessionPageState extends State<SessionPage> {
       _showOrientationMessage();
     } catch (e) {
       _logger.w('切换屏幕方向失败: $e');
-    }
-  }
-
-  /// 锁定为横屏
-  Future<void> _lockToLandscape() async {
-    try {
-      await OrientationManager.instance.lockToLandscape();
-      _showOrientationMessage('已锁定为横屏');
-    } catch (e) {
-      _logger.w('锁定横屏失败: $e');
-    }
-  }
-
-  /// 锁定为竖屏
-  Future<void> _lockToPortrait() async {
-    try {
-      await OrientationManager.instance.lockToPortrait();
-      _showOrientationMessage('已锁定为竖屏');
-    } catch (e) {
-      _logger.w('锁定竖屏失败: $e');
-    }
-  }
-
-  /// 允许所有方向
-  Future<void> _allowAllOrientations() async {
-    try {
-      await OrientationManager.instance.allowAllOrientations();
-      _showOrientationMessage('已允许所有方向');
-    } catch (e) {
-      _logger.w('允许所有方向失败: $e');
     }
   }
 
@@ -842,70 +1315,63 @@ class _SessionPageState extends State<SessionPage> {
     if (_isPointerInsideVideo == inside) {
       return;
     }
-    setState(() {
+    // Only trigger setState if cursor visibility will actually change
+    if (_remoteCursorImage != null || inside != _isPointerInsideVideo) {
+      setState(() {
+        _isPointerInsideVideo = inside;
+      });
+    } else {
       _isPointerInsideVideo = inside;
-    });
+    }
+    // Reduced logging for performance
   }
 
-  void _recordPointerPosition(PointerEvent event, [Size? viewSize]) {
-    final effectiveViewSize = viewSize ?? _getVideoSize();
-    if (effectiveViewSize.isEmpty) {
+  void _recordPointerPosition(
+    PointerEvent event,
+    MouseDisplayGeometry geometry,
+  ) {
+    if (!geometry.hasVideoContent) {
       return;
     }
-    final adjusted = _clampPointerToVideo(
-      event.localPosition,
-      effectiveViewSize,
-    );
+
+    // Throttle pointer position updates to reduce CPU usage
+    final now = DateTime.now();
+    final timeSinceLastEvent =
+        now.difference(_lastPointerEventTime).inMilliseconds;
+    final throttleMs =
+        _mouseMode == MouseMode.relative ? 0 : _pointerEventThrottleMs;
+    if (throttleMs > 0 && timeSinceLastEvent < throttleMs) {
+      return;
+    }
+    _lastPointerEventTime = now;
+
+    final adjusted = geometry.clampLocal(event.localPosition);
+
+    final minDeltaSquared = _mouseMode == MouseMode.relative ? 0.16 : 1.0;
 
     if (_shouldShowRemoteCursor) {
       final dx = adjusted.dx - _pointerPosition.dx;
       final dy = adjusted.dy - _pointerPosition.dy;
-      if ((dx * dx + dy * dy) < 0.25) {
+      // Increased threshold to reduce setState calls
+      if ((dx * dx + dy * dy) < minDeltaSquared) {
         return;
       }
       setState(() {
         _pointerPosition = adjusted;
       });
-    } else {
-      if (_pointerPosition != adjusted) {
-        setState(() {
-          _pointerPosition = adjusted;
-        });
+      _logger.d(
+          '远程光标位置更新: (${adjusted.dx.toStringAsFixed(1)}, ${adjusted.dy.toStringAsFixed(1)})');
+    } else if (_pointerPosition != adjusted) {
+      // Only update if position changed significantly
+      final dx = adjusted.dx - _pointerPosition.dx;
+      final dy = adjusted.dy - _pointerPosition.dy;
+      if ((dx * dx + dy * dy) < minDeltaSquared) {
+        return;
       }
+      setState(() {
+        _pointerPosition = adjusted;
+      });
     }
-  }
-
-  Offset _clampPointerToVideo(Offset local, Size viewSize) {
-    if (_remoteVideoSize.width <= 0 || _remoteVideoSize.height <= 0) {
-      final double x = (local.dx).clamp(0.0, viewSize.width);
-      final double y = (local.dy).clamp(0.0, viewSize.height);
-      return Offset(x, y);
-    }
-
-    final videoAspect = _remoteVideoSize.width / _remoteVideoSize.height;
-    final viewAspect = viewSize.width / viewSize.height;
-
-    double contentWidth;
-    double contentHeight;
-    double offsetX;
-    double offsetY;
-
-    if (videoAspect > viewAspect) {
-      contentWidth = viewSize.width;
-      contentHeight = contentWidth / videoAspect;
-      offsetX = 0;
-      offsetY = (viewSize.height - contentHeight) / 2;
-    } else {
-      contentHeight = viewSize.height;
-      contentWidth = contentHeight * videoAspect;
-      offsetY = 0;
-      offsetX = (viewSize.width - contentWidth) / 2;
-    }
-
-    final double clampedX = (local.dx - offsetX).clamp(0.0, contentWidth);
-    final double clampedY = (local.dy - offsetY).clamp(0.0, contentHeight);
-
-    return Offset(offsetX + clampedX, offsetY + clampedY);
   }
 
   String _getStateMessage(signaling.ConnectionState state) {
@@ -944,6 +1410,49 @@ class _SessionPageState extends State<SessionPage> {
     setState(() {
       _showMetrics = !_showMetrics;
     });
+  }
+
+  void _cycleDisplayMode() {
+    setState(() {
+      switch (_displayMode) {
+        case DisplayMode.contain:
+          _displayMode = DisplayMode.cover;
+          break;
+        case DisplayMode.cover:
+          _displayMode = DisplayMode.fit;
+          break;
+        case DisplayMode.fit:
+          _displayMode = DisplayMode.contain;
+          break;
+      }
+    });
+
+    // Show current mode
+    String modeName;
+    String modeDesc;
+    switch (_displayMode) {
+      case DisplayMode.contain:
+        modeName = '默认比例';
+        modeDesc = '保持原始比例，留黑边';
+        break;
+      case DisplayMode.cover:
+        modeName = '全屏拉伸';
+        modeDesc = '完整显示画面，不按比例缩放';
+        break;
+      case DisplayMode.fit:
+        modeName = '适当拉伸';
+        modeDesc = '移动端拉伸为20:9（其他平台保持拉伸）';
+        break;
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$modeName: $modeDesc'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   void _toggleMouseMode() {
@@ -1000,6 +1509,7 @@ class _SessionPageState extends State<SessionPage> {
   }
 
   void _disconnect() {
+    _shutdownQoSSystem();
     Navigator.of(context).pop();
   }
 
@@ -1007,6 +1517,27 @@ class _SessionPageState extends State<SessionPage> {
     final renderBox =
         _videoKey.currentContext?.findRenderObject() as RenderBox?;
     return renderBox?.size ?? Size.zero;
+  }
+
+  MouseDisplayGeometry _buildMouseGeometry(Size viewSize) {
+    if (viewSize.isEmpty) {
+      return const MouseDisplayGeometry.empty();
+    }
+    return MouseDisplayGeometry.compute(
+      viewSize: viewSize,
+      remoteVideoSize: _remoteVideoSize,
+      displayMode: _displayMode,
+      forceMobileWide: _shouldForceMobileWideAspectRatio(),
+    );
+  }
+
+  bool _shouldForceMobileWideAspectRatio() {
+    if (kIsWeb) {
+      return false;
+    }
+    final platform = defaultTargetPlatform;
+    return _displayMode == DisplayMode.fit &&
+        (platform == TargetPlatform.android || platform == TargetPlatform.iOS);
   }
 
   Map<String, dynamic>? _normalizeIceServer(dynamic server) {
@@ -1063,8 +1594,31 @@ class _SessionPageState extends State<SessionPage> {
     });
   }
 
+  IconData _getDisplayModeIcon() {
+    switch (_displayMode) {
+      case DisplayMode.contain:
+        return Icons.fit_screen;
+      case DisplayMode.cover:
+        return Icons.fullscreen;
+      case DisplayMode.fit:
+        return Icons.aspect_ratio;
+    }
+  }
+
+  String _getDisplayModeTooltip() {
+    switch (_displayMode) {
+      case DisplayMode.contain:
+        return '默认比例 (点击切换到全屏拉伸)';
+      case DisplayMode.cover:
+        return '全屏拉伸 (点击切换到适当拉伸)';
+      case DisplayMode.fit:
+        return '适当拉伸 (点击切换到默认比例)';
+    }
+  }
+
   @override
   void dispose() {
+    _shutdownQoSSystem();
     _dataChannelSubscription?.cancel();
     _remoteCursorImage?.dispose();
     _statsCollector?.dispose();
@@ -1117,7 +1671,27 @@ class _SessionPageState extends State<SessionPage> {
                 ),
             ],
           ),
-          if (_isFullScreen)
+          if (_isFullScreen) ...[
+            // Display mode toggle button
+            Positioned(
+              top: 16,
+              right: 80,
+              child: SafeArea(
+                child: Material(
+                  color: Colors.black.withOpacity(0.4),
+                  borderRadius: BorderRadius.circular(24),
+                  child: IconButton(
+                    icon: Icon(
+                      _getDisplayModeIcon(),
+                      color: Colors.white,
+                    ),
+                    tooltip: _getDisplayModeTooltip(),
+                    onPressed: _cycleDisplayMode,
+                  ),
+                ),
+              ),
+            ),
+            // Full screen exit button
             Positioned(
               top: 16,
               right: 16,
@@ -1136,6 +1710,7 @@ class _SessionPageState extends State<SessionPage> {
                 ),
               ),
             ),
+          ],
         ],
       ),
     );
@@ -1145,105 +1720,189 @@ class _SessionPageState extends State<SessionPage> {
     final Widget content;
 
     if (_remoteStream != null) {
-      content = Listener(
-        behavior: HitTestBehavior.opaque,
-        onPointerDown: (event) {
-          // Hide soft keyboard when user interacts with video surface
-          SystemChannels.textInput.invokeMethod('TextInput.hide');
-          _focusNode.requestFocus();
+      // Use RepaintBoundary to prevent pointer events from triggering
+      // unnecessary repaints of the entire widget tree
+      content = RepaintBoundary(
+        child: Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerDown: (event) {
+            // Hide soft keyboard when user interacts with video surface
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+            _focusNode.requestFocus();
 
-          final viewSize = _getVideoSize();
-          _updatePointerInside(true);
-          _recordPointerPosition(event, viewSize);
-          _mouseController?.onPointerDown(event, viewSize);
-        },
-        onPointerUp: (event) {
-          final viewSize = _getVideoSize();
-          _recordPointerPosition(event, viewSize);
-          _mouseController?.onPointerUp(event, viewSize);
-        },
-        onPointerMove: (event) {
-          final viewSize = _getVideoSize();
-          _recordPointerPosition(event, viewSize);
-          _mouseController?.onPointerMove(event, viewSize);
-        },
-        onPointerHover: (event) {
-          final viewSize = _getVideoSize();
-          _updatePointerInside(true);
-          _recordPointerPosition(event, viewSize);
-          _mouseController?.onPointerHover(event, viewSize);
-        },
-        onPointerSignal: (event) {
-          if (event is PointerScrollEvent) {
-            _mouseController?.onPointerScroll(event);
-          }
-        },
-        onPointerCancel: (event) {
-          _mouseController?.onPointerCancel(event);
-        },
-        child: Focus(
-          focusNode: _focusNode,
-          autofocus: true,
-          skipTraversal: true,
-          includeSemantics: false,
-          onKeyEvent: (node, event) {
-            final handled = _keyboardController?.handleKeyEvent(event) ?? false;
-            return handled ? KeyEventResult.handled : KeyEventResult.ignored;
+            final viewSize = _getVideoSize();
+            final geometry = _buildMouseGeometry(viewSize);
+            _updatePointerInside(true);
+            _recordPointerPosition(event, geometry);
+            _mouseController?.onPointerDown(event, geometry);
           },
-          child: MouseRegion(
-            onEnter: (event) {
-              final viewSize = _getVideoSize();
-              _updatePointerInside(true);
-              _recordPointerPosition(event, viewSize);
+          onPointerUp: (event) {
+            final viewSize = _getVideoSize();
+            final geometry = _buildMouseGeometry(viewSize);
+            _recordPointerPosition(event, geometry);
+            _mouseController?.onPointerUp(event, geometry);
+          },
+          onPointerMove: (event) {
+            final viewSize = _getVideoSize();
+            final geometry = _buildMouseGeometry(viewSize);
+            _recordPointerPosition(event, geometry);
+            _mouseController?.onPointerMove(event, geometry);
+          },
+          onPointerHover: (event) {
+            final viewSize = _getVideoSize();
+            final geometry = _buildMouseGeometry(viewSize);
+            _updatePointerInside(true);
+            _recordPointerPosition(event, geometry);
+            _mouseController?.onPointerHover(event, geometry);
+          },
+          onPointerSignal: (event) {
+            if (event is PointerScrollEvent) {
+              _mouseController?.onPointerScroll(event);
+            }
+          },
+          onPointerCancel: (event) {
+            _mouseController?.onPointerCancel(event);
+          },
+          child: Focus(
+            focusNode: _focusNode,
+            autofocus: true,
+            skipTraversal: true,
+            includeSemantics: false,
+            onKeyEvent: (node, event) {
+              final handled =
+                  _keyboardController?.handleKeyEvent(event) ?? false;
+              return handled ? KeyEventResult.handled : KeyEventResult.ignored;
             },
-            onExit: (event) {
-              _updatePointerInside(false);
-            },
-            cursor: _shouldShowRemoteCursor
-                ? SystemMouseCursors.none
-                : MouseCursor.defer,
-            child: Container(
-              key: _videoKey,
-              color: Colors.black,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Positioned.fill(
-                    child: RemoteMediaRenderer(
-                      stream: _remoteStream,
-                      objectFit:
-                          RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-                      onVideoSizeChanged: _handleVideoSizeChanged,
+            child: MouseRegion(
+              onEnter: (event) {
+                final viewSize = _getVideoSize();
+                final geometry = _buildMouseGeometry(viewSize);
+                _updatePointerInside(true);
+                _recordPointerPosition(event, geometry);
+              },
+              onExit: (event) {
+                _updatePointerInside(false);
+              },
+              cursor: _shouldHideLocalCursor
+                  ? SystemMouseCursors.none
+                  : MouseCursor.defer,
+              child: Container(
+                key: _videoKey,
+                color: Colors.black,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned.fill(
+                      child: _displayMode == DisplayMode.contain
+                          ? RemoteMediaRenderer(
+                              stream: _remoteStream,
+                              objectFit: RTCVideoViewObjectFit
+                                  .RTCVideoViewObjectFitContain,
+                              filterQuality: _videoFilterQuality,
+                              onVideoSizeChanged: _handleVideoSizeChanged,
+                            )
+                          : LayoutBuilder(
+                              builder: (context, constraints) {
+                                if (_shouldForceMobileWideAspectRatio()) {
+                                  final baseWidth = _remoteVideoSize.width > 0
+                                      ? _remoteVideoSize.width
+                                      : 1920.0;
+                                  final baseHeight = _remoteVideoSize.height > 0
+                                      ? _remoteVideoSize.height
+                                      : 1080.0;
+
+                                  final videoBox = baseWidth > 0 &&
+                                          baseHeight > 0
+                                      ? SizedBox(
+                                          width: baseWidth,
+                                          height: baseHeight,
+                                          child: RemoteMediaRenderer(
+                                            stream: _remoteStream,
+                                            objectFit: RTCVideoViewObjectFit
+                                                .RTCVideoViewObjectFitContain,
+                                            filterQuality: _videoFilterQuality,
+                                            onVideoSizeChanged:
+                                                _handleVideoSizeChanged,
+                                          ),
+                                        )
+                                      : RemoteMediaRenderer(
+                                          stream: _remoteStream,
+                                          objectFit: RTCVideoViewObjectFit
+                                              .RTCVideoViewObjectFitContain,
+                                          filterQuality: _videoFilterQuality,
+                                          onVideoSizeChanged:
+                                              _handleVideoSizeChanged,
+                                        );
+
+                                  return Center(
+                                    child: AspectRatio(
+                                      aspectRatio: 20 / 9,
+                                      child: Container(
+                                        color: Colors.black,
+                                        child: FittedBox(
+                                          fit: BoxFit.contain,
+                                          child: videoBox,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                return SizedBox(
+                                  width: constraints.maxWidth,
+                                  height: constraints.maxHeight,
+                                  child: FittedBox(
+                                    fit: BoxFit.fill,
+                                    child: SizedBox(
+                                      width: _remoteVideoSize.width > 0
+                                          ? _remoteVideoSize.width
+                                          : 1920.0,
+                                      height: _remoteVideoSize.height > 0
+                                          ? _remoteVideoSize.height
+                                          : 1080.0,
+                                      child: RemoteMediaRenderer(
+                                        stream: _remoteStream,
+                                        objectFit: RTCVideoViewObjectFit
+                                            .RTCVideoViewObjectFitCover,
+                                        filterQuality: _videoFilterQuality,
+                                        onVideoSizeChanged:
+                                            _handleVideoSizeChanged,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
                     ),
-                  ),
-                  // Audio renderer - MUST be visible on Windows for audio to play
-                  // Positioned in bottom-right corner, nearly transparent
-                  if (_audioRenderer != null && _remoteStream != null)
-                    Positioned(
-                      right: 0,
-                      bottom: 0,
-                      width: 1,
-                      height: 1,
-                      child: Container(
-                        color: Colors.transparent,
-                        child: RTCVideoView(
-                          _audioRenderer!.renderer,
-                          objectFit:
-                              RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                          mirror: false,
+                    // Audio renderer - MUST be visible on Windows for audio to play
+                    // Positioned in bottom-right corner, nearly transparent
+                    if (_audioRenderer != null && _remoteStream != null)
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        width: 1,
+                        height: 1,
+                        child: Container(
+                          color: Colors.transparent,
+                          child: RTCVideoView(
+                            _audioRenderer!.renderer,
+                            objectFit: RTCVideoViewObjectFit
+                                .RTCVideoViewObjectFitCover,
+                            mirror: false,
+                          ),
                         ),
                       ),
-                    ),
-                  if (_shouldShowRemoteCursor && _remoteCursorImage != null)
-                    Positioned(
-                      left: _pointerPosition.dx - _cursorHotspot.dx,
-                      top: _pointerPosition.dy - _cursorHotspot.dy,
-                      child: RawImage(
-                        image: _remoteCursorImage,
-                        filterQuality: FilterQuality.high,
+                    if (_shouldShowRemoteCursor && _remoteCursorImage != null)
+                      Positioned(
+                        left: _pointerPosition.dx - _cursorHotspot.dx,
+                        top: _pointerPosition.dy - _cursorHotspot.dy,
+                        child: RawImage(
+                          image: _remoteCursorImage,
+                          filterQuality: FilterQuality.high,
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

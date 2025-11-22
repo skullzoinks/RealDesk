@@ -41,9 +41,7 @@ android {
 
     sourceSets {
         getByName("main") {
-            proto {
-                srcDir("src/main/proto")
-            }
+            java.srcDirs("src/main/java", "build/generated/source/proto/main/java")
         }
     }
 }

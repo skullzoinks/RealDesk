@@ -153,6 +153,12 @@ class _SettingsPageState extends State<SettingsPage> {
                   value: _s.useProtobuf,
                   onChanged: (v) => setState(() => _s.useProtobuf = v),
                 ),
+                SwitchListTile(
+                  title: const Text('发送本地音视频'),
+                  subtitle: const Text('允许向远程端传输本地摄像头和麦克风（需重新连接生效）'),
+                  value: _s.sendLocalMedia,
+                  onChanged: (v) => setState(() => _s.sendLocalMedia = v),
+                ),
                 const SizedBox(height: 16),
                 const Divider(),
                 const SizedBox(height: 8),

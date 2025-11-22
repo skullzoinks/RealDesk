@@ -1,17 +1,22 @@
 import 'package:flutter/material.dart';
 
 import '../ui/pages/connect_page.dart';
+import '../ui/pages/launch_page.dart';
 import '../ui/pages/session_page.dart';
 import '../ui/pages/settings_page.dart';
 
 /// Application routes
 class AppRoutes {
-  static const String connect = '/';
+  static const String launch = '/';
+  static const String connect = '/connect';
   static const String session = '/session';
   static const String settings = '/settings';
 
   static Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
+      case launch:
+        return MaterialPageRoute(builder: (_) => const LaunchPage());
+
       case connect:
         return MaterialPageRoute(builder: (_) => const ConnectPage());
 
@@ -29,12 +34,11 @@ class AppRoutes {
         }
 
         return MaterialPageRoute(
-          builder:
-              (_) => SessionPage(
-                signalingUrl: signalingUrl,
-                roomId: roomId,
-                token: args['token'] as String?,
-              ),
+          builder: (_) => SessionPage(
+            signalingUrl: signalingUrl,
+            roomId: roomId,
+            token: args['token'] as String?,
+          ),
         );
 
       case AppRoutes.settings:
@@ -47,11 +51,10 @@ class AppRoutes {
 
   static Route<dynamic> _errorRoute(String message) {
     return MaterialPageRoute(
-      builder:
-          (_) => Scaffold(
-            appBar: AppBar(title: const Text('错误')),
-            body: Center(child: Text(message)),
-          ),
+      builder: (_) => Scaffold(
+        appBar: AppBar(title: const Text('错误')),
+        body: Center(child: Text(message)),
+      ),
     );
   }
 }

@@ -9,6 +9,9 @@ class QoSMetrics {
     this.packetLoss = 0.0,
     this.framesReceived = 0,
     this.framesDropped = 0,
+    this.codec = '',
+    this.localIceServer = '',
+    this.remoteIceServer = '',
   });
 
   final int videoBitrate; // bps
@@ -19,6 +22,9 @@ class QoSMetrics {
   final double packetLoss; // percentage
   final int framesReceived;
   final int framesDropped;
+  final String codec;
+  final String localIceServer;
+  final String remoteIceServer;
 
   ConnectionQuality get quality {
     if (rtt == 0 && packetLoss == 0.0) {
@@ -60,4 +66,3 @@ enum ConnectionQuality {
   poor,
   bad,
 }
-

@@ -13,6 +13,17 @@ class KeyMapping {
     LogicalKeyboardKey.backspace.keyId: 8,
     LogicalKeyboardKey.escape.keyId: 27,
     LogicalKeyboardKey.delete.keyId: 127,
+    // Punctuation keys
+    LogicalKeyboardKey.comma.keyId: 44, // ,
+    LogicalKeyboardKey.period.keyId: 46, // .
+    LogicalKeyboardKey.slash.keyId: 47, // /
+    LogicalKeyboardKey.semicolon.keyId: 59, // ;
+    LogicalKeyboardKey.minus.keyId: 45, // -
+    LogicalKeyboardKey.equal.keyId: 61, // =
+    LogicalKeyboardKey.bracketLeft.keyId: 91, // [
+    LogicalKeyboardKey.bracketRight.keyId: 93, // ]
+    LogicalKeyboardKey.backslash.keyId: 92, // \
+    LogicalKeyboardKey.backquote.keyId: 96, // `
     // Apostrophe/quote key uses the unshifted SDL key code (SDLK_APOSTROPHE)
     LogicalKeyboardKey.quote.keyId: 39,
     LogicalKeyboardKey.quoteSingle.keyId: 39,

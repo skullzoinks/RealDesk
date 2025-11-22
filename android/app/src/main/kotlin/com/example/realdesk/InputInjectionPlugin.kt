@@ -12,7 +12,7 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import com.google.protobuf.InvalidProtocolBufferException
-import remote.proto.RemoteInputProto
+import remote.proto.RemoteInput
 
 /**
  * Plugin for injecting input events received from remote controller
@@ -107,14 +107,14 @@ class InputInjectionPlugin(private val activity: Activity) : MethodChannel.Metho
 
     private fun injectProtobufMessage(data: ByteArray) {
         try {
-            val envelope = RemoteInputProto.Envelope.parseFrom(data)
+            val envelope = RemoteInput.Envelope.parseFrom(data)
             
             when (envelope.payloadCase) {
-                RemoteInputProto.Envelope.PayloadCase.KEYBOARD -> {
+                RemoteInput.Envelope.PayloadCase.KEYBOARD -> {
                     val kb = envelope.keyboard
                     injectKeyboard(kb.key, kb.code, kb.down, kb.mods)
                 }
-                RemoteInputProto.Envelope.PayloadCase.MOUSEABS -> {
+                RemoteInput.Envelope.PayloadCase.MOUSEABS -> {
                     val m = envelope.mouseAbs
                     injectMouseAbsolute(
                         m.x.toDouble(), 
@@ -124,7 +124,7 @@ class InputInjectionPlugin(private val activity: Activity) : MethodChannel.Metho
                         m.btns.bits
                     )
                 }
-                RemoteInputProto.Envelope.PayloadCase.MOUSEREL -> {
+                RemoteInput.Envelope.PayloadCase.MOUSEREL -> {
                     val m = envelope.mouseRel
                     injectMouseRelative(
                         m.dx.toDouble(),
@@ -132,7 +132,7 @@ class InputInjectionPlugin(private val activity: Activity) : MethodChannel.Metho
                         m.btns.bits
                     )
                 }
-                RemoteInputProto.Envelope.PayloadCase.MOUSEWHEEL -> {
+                RemoteInput.Envelope.PayloadCase.MOUSEWHEEL -> {
                     val m = envelope.mouseWheel
                     injectMouseWheel(m.dx.toDouble(), m.dy.toDouble())
                 }

@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:logger/logger.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'models/signaling_messages.dart';
@@ -12,11 +14,13 @@ class SignalingClient {
     required this.signalingUrl,
     this.reconnectDelay = const Duration(seconds: 3),
     this.maxReconnectAttempts = 3,
+    this.allowInsecure = false,
   }) : _logger = Logger();
 
   final String signalingUrl;
   final Duration reconnectDelay;
   final int maxReconnectAttempts;
+  final bool allowInsecure;
   final Logger _logger;
 
   WebSocketChannel? _channel;
@@ -46,7 +50,7 @@ class SignalingClient {
 
     try {
       _logger.i('Connecting to signaling server: $signalingUrl');
-      _channel = WebSocketChannel.connect(Uri.parse(signalingUrl));
+      _channel = _createChannel();
 
       // Listen to messages
       _channel!.stream.listen(
@@ -128,6 +132,29 @@ class SignalingClient {
         'sdpMLineIndex': sdpMLineIndex,
       },
     });
+  }
+
+  WebSocketChannel _createChannel() {
+    final uri = Uri.parse(signalingUrl);
+    if (_shouldSkipCertificateValidation(uri)) {
+      final client = HttpClient()
+        ..badCertificateCallback =
+            (X509Certificate cert, String host, int port) => true;
+      _logger.w('Allowing insecure TLS for signaling server: $uri');
+      return IOWebSocketChannel.connect(
+        uri,
+        customClient: client,
+      );
+    }
+    return WebSocketChannel.connect(uri);
+  }
+
+  bool _shouldSkipCertificateValidation(Uri uri) {
+    if (!allowInsecure) {
+      return false;
+    }
+    final scheme = uri.scheme.toLowerCase();
+    return scheme == 'wss' || scheme == 'https';
   }
 
   /// Handle incoming messages

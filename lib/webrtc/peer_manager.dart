@@ -21,7 +21,7 @@ class PeerManager {
         _logger = Logger();
 
   final List<dynamic> _iceServers;
-  final String? _preferredVideoCodec;
+  String? _preferredVideoCodec;
   final Logger _logger;
 
   RTCPeerConnection? _peerConnection;
@@ -35,6 +35,14 @@ class PeerManager {
   bool _isClosed = false;
   bool get _preferHardwareCodecs =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  // ICE connection state management
+  RTCIceConnectionState? _lastIceConnectionState;
+  Timer? _iceRestartTimer;
+  int _iceRestartAttempts = 0;
+  static const int _maxIceRestartAttempts = 3;
+  static const Duration _iceRestartDelay = Duration(seconds: 2);
+  bool _isIceRestarting = false;
 
   static const Map<String, List<String>> _codecSynonyms = {
     'H264': ['H264', 'AVC'],
@@ -59,6 +67,8 @@ class PeerManager {
   final _iceCandidateController = StreamController<RTCIceCandidate>.broadcast();
   final _connectionStateController =
       StreamController<RTCPeerConnectionState>.broadcast();
+  final _iceConnectionStateController =
+      StreamController<RTCIceConnectionState>.broadcast();
   final _dataChannelController =
       StreamController<RTCDataChannelMessage>.broadcast();
   final _dataChannelStateController =
@@ -68,6 +78,8 @@ class PeerManager {
   Stream<RTCIceCandidate> get iceCandidate => _iceCandidateController.stream;
   Stream<RTCPeerConnectionState> get connectionState =>
       _connectionStateController.stream;
+  Stream<RTCIceConnectionState> get iceConnectionState =>
+      _iceConnectionStateController.stream;
   Stream<RTCDataChannelMessage> get dataChannelMessage =>
       _dataChannelController.stream;
   Stream<RTCDataChannelState> get dataChannelState =>
@@ -93,10 +105,18 @@ class PeerManager {
       'iceServers': _iceServers,
     };
 
+    // Enable hardware acceleration on macOS
+    final constraints = <String, dynamic>{
+      'mandatory': {},
+      'optional': [
+        {'DtlsSrtpKeyAgreement': true},
+      ],
+    };
+
     _isClosed = false;
     _peerConnection = await createPeerConnection(
       configuration,
-      <String, dynamic>{},
+      constraints,
     );
     await _ensureAudioReceiver();
 
@@ -104,6 +124,7 @@ class PeerManager {
     _peerConnection!.onTrack = _onTrack;
     _peerConnection!.onIceCandidate = _onIceCandidate;
     _peerConnection!.onConnectionState = _onConnectionState;
+    _peerConnection!.onIceConnectionState = _onIceConnectionState;
     _peerConnection!.onDataChannel = _onDataChannel;
 
     _logger.i('Peer connection created');
@@ -122,15 +143,25 @@ class PeerManager {
       'sdpSemantics': 'unified-plan',
       'iceServers': iceServers,
     };
+
+    // Enable hardware acceleration on macOS
+    final constraints = <String, dynamic>{
+      'mandatory': {},
+      'optional': [
+        {'DtlsSrtpKeyAgreement': true},
+      ],
+    };
+
     _isClosed = false;
     _peerConnection = await createPeerConnection(
       configuration,
-      <String, dynamic>{},
+      constraints,
     );
     await _ensureAudioReceiver();
     _peerConnection!.onTrack = _onTrack;
     _peerConnection!.onIceCandidate = _onIceCandidate;
     _peerConnection!.onConnectionState = _onConnectionState;
+    _peerConnection!.onIceConnectionState = _onIceConnectionState;
     _peerConnection!.onDataChannel = _onDataChannel;
   }
 
@@ -288,7 +319,8 @@ class PeerManager {
 
   /// Handle incoming track
   void _onTrack(RTCTrackEvent event) async {
-    _logger.i('Received track: ${event.track.kind}');
+    _logger.i('Received track: ${event.track.kind}, id=${event.track.id}, '
+        'enabled=${event.track.enabled}');
 
     // Use the stream from the event if available, otherwise create/use our accumulated stream
     if (event.streams.isNotEmpty) {
@@ -297,24 +329,26 @@ class PeerManager {
       // If we don't have a remote stream yet, use this one
       if (_remoteStream == null) {
         _remoteStream = incomingStream;
+        _logger.i('Using new remote stream: ${_remoteStream!.id}');
         if (_canAddTo(_remoteStreamController)) {
           _remoteStreamController.add(_remoteStream!);
         }
       } else if (_remoteStream!.id != incomingStream.id) {
-        // Different stream, add the new track to our existing stream
-        try {
-          await _remoteStream!.addTrack(event.track);
-          _logger
-              .i('Added ${event.track.kind} track to existing remote stream');
-          // Emit the updated stream
-          if (_canAddTo(_remoteStreamController)) {
-            _remoteStreamController.add(_remoteStream!);
-          }
-        } catch (e) {
-          _logger.w('Failed to add track to existing stream: $e');
+        // Different stream ID - this is a completely new stream (e.g., after reconnection)
+        _logger.i(
+          'Replacing stream ${_remoteStream!.id} with new stream ${incomingStream.id}',
+        );
+        _remoteStream = incomingStream;
+        // Always emit on stream replacement to force renderer update
+        if (_canAddTo(_remoteStreamController)) {
+          _remoteStreamController.add(_remoteStream!);
         }
       } else {
-        // Same stream, track already added, just emit it
+        // Same stream ID - track was added to existing stream
+        // Force emit to ensure renderer picks up new tracks (important for reconnection)
+        _logger.i(
+          'Track ${event.track.kind} added to existing stream ${_remoteStream!.id}',
+        );
         if (_canAddTo(_remoteStreamController)) {
           _remoteStreamController.add(_remoteStream!);
         }
@@ -324,6 +358,7 @@ class PeerManager {
       if (_remoteStream == null) {
         try {
           _remoteStream = await createLocalMediaStream('remote-stream');
+          _logger.i('Created new remote stream: ${_remoteStream!.id}');
         } catch (e) {
           _logger.e('Failed to create remote stream: $e');
           return;
@@ -340,6 +375,14 @@ class PeerManager {
         _logger.w('Failed to add track to stream: $e');
       }
     }
+
+    // Log current stream state for debugging
+    if (_remoteStream != null) {
+      _logger.i(
+        'Remote stream state: ${_remoteStream!.getVideoTracks().length} video, '
+        '${_remoteStream!.getAudioTracks().length} audio tracks',
+      );
+    }
   }
 
   /// Handle ICE candidate
@@ -355,6 +398,146 @@ class PeerManager {
     _logger.i('Connection state changed: $state');
     if (_canAddTo(_connectionStateController)) {
       _connectionStateController.add(state);
+    }
+  }
+
+  /// Handle ICE connection state change
+  void _onIceConnectionState(RTCIceConnectionState state) {
+    _logger.i('ICE connection state changed: $state');
+    _lastIceConnectionState = state;
+
+    if (_canAddTo(_iceConnectionStateController)) {
+      _iceConnectionStateController.add(state);
+    }
+
+    // Handle disconnection with automatic ICE restart
+    if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+      _scheduleIceRestart();
+    } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+      _handleIceConnectionFailed();
+    } else if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+        state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+      // Connection restored, reset counters
+      _cancelIceRestart();
+      _iceRestartAttempts = 0;
+    }
+  }
+
+  /// Schedule an ICE restart after a delay
+  void _scheduleIceRestart() {
+    if (_isIceRestarting || _isClosed) {
+      return;
+    }
+
+    // Cancel any existing timer
+    _iceRestartTimer?.cancel();
+
+    if (_iceRestartAttempts >= _maxIceRestartAttempts) {
+      _logger.w(
+        'Max ICE restart attempts ($_maxIceRestartAttempts) reached, '
+        'connection may need full renegotiation',
+      );
+      return;
+    }
+
+    _logger.i(
+      'Scheduling ICE restart in ${_iceRestartDelay.inSeconds}s '
+      '(attempt ${_iceRestartAttempts + 1}/$_maxIceRestartAttempts)',
+    );
+
+    _iceRestartTimer = Timer(_iceRestartDelay, () {
+      if (!_isClosed &&
+          _lastIceConnectionState ==
+              RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+        _performIceRestart();
+      }
+    });
+  }
+
+  /// Cancel scheduled ICE restart
+  void _cancelIceRestart() {
+    _iceRestartTimer?.cancel();
+    _iceRestartTimer = null;
+    if (_isIceRestarting) {
+      _logger.i('ICE restart cancelled - connection restored');
+      _isIceRestarting = false;
+    }
+  }
+
+  /// Perform ICE restart to recover connection
+  Future<void> _performIceRestart() async {
+    if (_peerConnection == null || _isClosed || _isIceRestarting) {
+      return;
+    }
+
+    _isIceRestarting = true;
+    _iceRestartAttempts++;
+
+    try {
+      _logger.i('Performing ICE restart (attempt $_iceRestartAttempts)...');
+
+      // Create new offer with iceRestart flag
+      final offer = await _peerConnection!.createOffer({
+        'iceRestart': true,
+        'offerToReceiveVideo': 1,
+        'offerToReceiveAudio': 1,
+      });
+
+      await _peerConnection!.setLocalDescription(offer);
+
+      _logger.i('ICE restart offer created, local description set');
+      // Note: The offer needs to be sent through signaling
+      // This will be handled by the session page
+    } catch (e, stackTrace) {
+      _logger.e(
+        'ICE restart failed: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
+    } finally {
+      _isIceRestarting = false;
+    }
+  }
+
+  /// Handle ICE connection failure
+  void _handleIceConnectionFailed() {
+    _logger.w(
+      'ICE connection failed after $_iceRestartAttempts restart attempts',
+    );
+    _cancelIceRestart();
+    // Connection state will propagate to session page for user notification
+  }
+
+  /// Manually trigger ICE restart (can be called from UI)
+  Future<RTCSessionDescription?> restartIce() async {
+    if (_peerConnection == null || _isClosed) {
+      _logger.w('Cannot restart ICE: peer connection not available');
+      return null;
+    }
+
+    try {
+      _logger.i('Manual ICE restart requested');
+      _cancelIceRestart();
+      _iceRestartAttempts = 0;
+
+      var offer = await _peerConnection!.createOffer({
+        'iceRestart': true,
+        'offerToReceiveVideo': 1,
+        'offerToReceiveAudio': 1,
+      });
+
+      offer = _applyLocalCodecPreferences(offer);
+      await _peerConnection!.setLocalDescription(offer);
+
+      _logger.i('ICE restart offer created successfully');
+      return offer;
+    } catch (e, stackTrace) {
+      _logger.e(
+        'Manual ICE restart failed: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      return null;
     }
   }
 
@@ -395,10 +578,70 @@ class PeerManager {
     return await _peerConnection!.getStats();
   }
 
+  /// Update preferred video codec and optionally renegotiate
+  Future<void> setPreferredCodec(String? codec,
+      {bool renegotiate = false}) async {
+    final normalized = codec?.trim().toUpperCase();
+    if (_preferredVideoCodec == normalized) {
+      _logger.i('Codec already set to $normalized, no change needed');
+      return;
+    }
+
+    _preferredVideoCodec = normalized;
+    _logger.i('Updated preferred video codec to: $_preferredVideoCodec');
+
+    if (renegotiate && _peerConnection != null) {
+      await this.renegotiate();
+    }
+  }
+
+  /// Renegotiate the connection with updated codec preferences
+  /// This creates a new offer and applies codec preferences
+  Future<void> renegotiate() async {
+    if (_peerConnection == null) {
+      throw Exception('Peer connection not created');
+    }
+
+    final signalingState = await _peerConnection!.getSignalingState();
+    if (signalingState != RTCSignalingState.RTCSignalingStateStable) {
+      _logger.w('Cannot renegotiate: signaling state is $signalingState');
+      throw Exception('Cannot renegotiate: connection not in stable state');
+    }
+
+    _logger.i(
+        'Starting renegotiation with codec preference: $_preferredVideoCodec');
+
+    try {
+      // Create new offer with updated codec preferences
+      var offer = await _peerConnection!.createOffer({
+        'offerToReceiveVideo': 1,
+        'offerToReceiveAudio': 1,
+        'mandatory': {'OfferToReceiveVideo': true, 'OfferToReceiveAudio': true},
+      });
+
+      offer = _applyLocalCodecPreferences(offer);
+      await _peerConnection!.setLocalDescription(offer);
+
+      _logger.i('Renegotiation offer created, waiting for answer');
+      // Note: The caller must send this offer through signaling and handle the answer
+    } catch (e, stackTrace) {
+      _logger.e(
+        'Renegotiation failed: $e',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
+  }
+
   /// Close peer connection
   Future<void> close() async {
     _logger.i('Closing peer connection');
     _isClosed = true;
+
+    // Cancel any pending ICE restart
+    _cancelIceRestart();
+    _iceRestartAttempts = 0;
 
     await _dataChannel?.close();
     _dataChannel = null;
@@ -427,6 +670,7 @@ class PeerManager {
     _remoteStreamController.close();
     _iceCandidateController.close();
     _connectionStateController.close();
+    _iceConnectionStateController.close();
     _dataChannelController.close();
     _dataChannelStateController.close();
   }
