@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../input/schema/input_messages.dart';
 
-/// Control bar widget with connection controls
+/// Control bar widget with connection controls, styled like a Switch Quick Menu
 class ControlBar extends StatelessWidget {
   const ControlBar({
     required this.isConnected,
@@ -37,256 +37,208 @@ class ControlBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final orientation = MediaQuery.of(context).orientation;
     final isLandscape = orientation == Orientation.landscape;
+    final theme = Theme.of(context);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.7),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.3),
-            blurRadius: 8,
-            offset: const Offset(0, -2),
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2D2D2D).withOpacity(0.95),
+          borderRadius: BorderRadius.circular(32),
+          border: Border.all(
+            color: Colors.white.withOpacity(0.1),
+            width: 1,
           ),
-        ],
-      ),
-      padding: EdgeInsets.symmetric(
-        horizontal: isLandscape ? 8 : 16,
-        vertical: isLandscape ? 6 : 12,
-      ),
-      child: isLandscape ? _buildLandscapeLayout() : _buildPortraitLayout(),
-    );
-  }
-
-  Widget _buildPortraitLayout() {
-    return Row(
-      children: [
-        // Connection status
-        _buildConnectionStatus(),
-        const Spacer(),
-        // Control buttons - 使用Flexible来防止溢出
-        Flexible(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: _buildControlButtons(),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLandscapeLayout() {
-    return Row(
-      children: [
-        // Connection status (compact)
-        Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: isConnected ? Colors.green : Colors.red,
-            shape: BoxShape.circle,
-          ),
-        ),
-        const SizedBox(width: 8),
-
-        // Essential buttons only in landscape
-        ..._buildCompactButtons(),
-
-        const Spacer(),
-
-        // Compact disconnect button
-        ElevatedButton(
-          onPressed: onDisconnect,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.red,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            minimumSize: const Size(30, 24),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          child: const Icon(Icons.close, size: 14),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildConnectionStatus() {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 12,
-          height: 12,
-          decoration: BoxDecoration(
-            color: isConnected ? Colors.green : Colors.red,
-            shape: BoxShape.circle,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          isConnected ? '已连接' : '未连接',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 14,
-          ),
-        ),
-      ],
-    );
-  }
-
-  List<Widget> _buildControlButtons() {
-    return [
-      // Metrics toggle
-      IconButton(
-        icon: Icon(
-          showMetrics ? Icons.analytics : Icons.analytics_outlined,
-          color: Colors.white,
-        ),
-        tooltip: showMetrics ? '隐藏统计' : '显示统计',
-        onPressed: onToggleMetrics,
-      ),
-      const SizedBox(width: 4),
-
-      // Mouse mode toggle
-      IconButton(
-        icon: Icon(
-          mouseMode == MouseMode.absolute ? Icons.touch_app : Icons.mouse,
-          color: Colors.white,
-        ),
-        tooltip: mouseMode == MouseMode.absolute ? '切换到相对模式' : '切换到绝对模式',
-        onPressed: onToggleMouseMode,
-      ),
-      const SizedBox(width: 4),
-
-      // Fullscreen toggle
-      IconButton(
-        icon: Icon(
-          isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-          color: Colors.white,
-        ),
-        tooltip: isFullScreen ? '退出全屏' : '进入全屏',
-        onPressed: onToggleFullScreen,
-      ),
-      const SizedBox(width: 4),
-
-      // Audio toggle
-      if (onToggleAudio != null) ...[
-        IconButton(
-          icon: Icon(
-            (audioEnabled ?? true) ? Icons.volume_up : Icons.volume_off,
-            color: Colors.white,
-          ),
-          tooltip: (audioEnabled ?? true) ? '关闭音频' : '开启音频',
-          onPressed: onToggleAudio,
-        ),
-        const SizedBox(width: 4),
-      ],
-
-      // Screen orientation toggle
-      if (onToggleOrientation != null) ...[
-        IconButton(
-          icon: const Icon(
-            Icons.screen_rotation,
-            color: Colors.white,
-          ),
-          tooltip: '切换屏幕方向',
-          onPressed: onToggleOrientation,
-        ),
-        const SizedBox(width: 4),
-      ],
-
-      // Screen orientation menu
-      if (onOrientationMenu != null) ...[
-        PopupMenuButton<String>(
-          icon: const Icon(
-            Icons.more_vert,
-            color: Colors.white,
-          ),
-          tooltip: '屏幕方向选项',
-          onSelected: (value) => onOrientationMenu?.call(),
-          itemBuilder: (context) => [
-            const PopupMenuItem(
-              value: 'menu',
-              child: Row(
-                children: [
-                  Icon(Icons.settings_overscan),
-                  SizedBox(width: 8),
-                  Text('方向设置'),
-                ],
-              ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.5),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
-        const SizedBox(width: 4),
-      ],
-
-      // Disconnect button
-      ElevatedButton.icon(
-        icon: const Icon(Icons.close, size: 16),
-        label: const Text('断开', style: TextStyle(fontSize: 12)),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.red,
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          minimumSize: const Size(60, 32),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: const EdgeInsets.symmetric(
+          horizontal: 24,
+          vertical: 12,
         ),
-        onPressed: onDisconnect,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Connection Status Indicator
+            _buildStatusIndicator(),
+            
+            const SizedBox(width: 16),
+            Container(
+              width: 1,
+              height: 24,
+              color: Colors.white.withOpacity(0.2),
+            ),
+            const SizedBox(width: 16),
+
+            // Controls
+            _buildControlButton(
+              icon: showMetrics ? Icons.analytics : Icons.analytics_outlined,
+              tooltip: showMetrics ? 'Hide Metrics' : 'Show Metrics',
+              isActive: showMetrics,
+              onTap: onToggleMetrics,
+            ),
+            const SizedBox(width: 12),
+            
+            _buildControlButton(
+              icon: mouseMode == MouseMode.absolute ? Icons.touch_app : Icons.mouse,
+              tooltip: mouseMode == MouseMode.absolute ? 'Switch to Relative' : 'Switch to Absolute',
+              isActive: mouseMode == MouseMode.relative,
+              onTap: onToggleMouseMode,
+            ),
+            const SizedBox(width: 12),
+
+            _buildControlButton(
+              icon: isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+              tooltip: isFullScreen ? 'Exit Fullscreen' : 'Enter Fullscreen',
+              isActive: isFullScreen,
+              onTap: onToggleFullScreen,
+            ),
+            
+            if (onToggleAudio != null) ...[
+              const SizedBox(width: 12),
+              _buildControlButton(
+                icon: (audioEnabled ?? true) ? Icons.volume_up : Icons.volume_off,
+                tooltip: (audioEnabled ?? true) ? 'Mute Audio' : 'Unmute Audio',
+                isActive: audioEnabled ?? true,
+                onTap: onToggleAudio!,
+              ),
+            ],
+
+            if (onToggleOrientation != null) ...[
+              const SizedBox(width: 12),
+              _buildControlButton(
+                icon: Icons.screen_rotation,
+                tooltip: 'Rotate Screen',
+                onTap: onToggleOrientation!,
+              ),
+            ],
+
+            const SizedBox(width: 16),
+            Container(
+              width: 1,
+              height: 24,
+              color: Colors.white.withOpacity(0.2),
+            ),
+            const SizedBox(width: 16),
+
+            // Disconnect Button
+            _buildDisconnectButton(theme),
+          ],
+        ),
       ),
-    ];
+    );
   }
 
-  List<Widget> _buildCompactButtons() {
-    return [
-      // Essential buttons with smaller size for landscape
-      IconButton(
-        icon: Icon(
-          showMetrics ? Icons.analytics : Icons.analytics_outlined,
-          color: Colors.white,
-          size: 18,
+  Widget _buildStatusIndicator() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: isConnected ? const Color(0xFF2DD14B).withOpacity(0.2) : const Color(0xFFE60012).withOpacity(0.2),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isConnected ? const Color(0xFF2DD14B) : const Color(0xFFE60012),
+          width: 1,
         ),
-        tooltip: showMetrics ? '隐藏统计' : '显示统计',
-        onPressed: onToggleMetrics,
-        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-        padding: const EdgeInsets.all(2),
       ),
-      IconButton(
-        icon: Icon(
-          mouseMode == MouseMode.absolute ? Icons.touch_app : Icons.mouse,
-          color: Colors.white,
-          size: 18,
-        ),
-        tooltip: mouseMode == MouseMode.absolute ? '切换到相对模式' : '切换到绝对模式',
-        onPressed: onToggleMouseMode,
-        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-        padding: const EdgeInsets.all(2),
-      ),
-      IconButton(
-        icon: Icon(
-          isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-          color: Colors.white,
-          size: 18,
-        ),
-        tooltip: isFullScreen ? '退出全屏' : '进入全屏',
-        onPressed: onToggleFullScreen,
-        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-        padding: const EdgeInsets.all(2),
-      ),
-      // Audio toggle for landscape mode
-      if (onToggleAudio != null)
-        IconButton(
-          icon: Icon(
-            (audioEnabled ?? true) ? Icons.volume_up : Icons.volume_off,
-            color: Colors.white,
-            size: 18,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: isConnected ? const Color(0xFF2DD14B) : const Color(0xFFE60012),
+              shape: BoxShape.circle,
+            ),
           ),
-          tooltip: (audioEnabled ?? true) ? '关闭音频' : '开启音频',
-          onPressed: onToggleAudio,
-          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-          padding: const EdgeInsets.all(2),
+          const SizedBox(width: 8),
+          Text(
+            isConnected ? 'ONLINE' : 'OFFLINE',
+            style: TextStyle(
+              color: isConnected ? const Color(0xFF2DD14B) : const Color(0xFFE60012),
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildControlButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+    bool isActive = false,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: isActive ? Colors.white : Colors.white.withOpacity(0.1),
+            ),
+            child: Icon(
+              icon,
+              size: 20,
+              color: isActive ? Colors.black : Colors.white,
+            ),
+          ),
         ),
-    ];
+      ),
+    );
+  }
+
+  Widget _buildDisconnectButton(ThemeData theme) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onDisconnect,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFE60012),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFE60012).withOpacity(0.4),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.power_settings_new, color: Colors.white, size: 18),
+              SizedBox(width: 8),
+              Text(
+                'EXIT',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                  letterSpacing: 1,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
+

@@ -35,6 +35,9 @@ import '../../utils/audio_manager.dart';
 import '../widgets/control_bar.dart';
 import '../widgets/metrics_overlay.dart';
 import '../widgets/orientation_dialog.dart';
+import '../widgets/switch_loading_screen.dart';
+import '../widgets/switch_notification.dart';
+import '../widgets/switch_confirm_dialog.dart';
 
 /// Remote session page with video stream and input handling
 class SessionPage extends StatefulWidget {
@@ -552,12 +555,16 @@ class _SessionPageState extends State<SessionPage> {
     }
 
     if (message != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 2),
-        ),
-      );
+      SwitchNotificationType type = SwitchNotificationType.info;
+      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+          state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+        type = SwitchNotificationType.success;
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
+          state == RTCIceConnectionState.RTCIceConnectionStateDisconnected ||
+          state == RTCIceConnectionState.RTCIceConnectionStateClosed) {
+        type = SwitchNotificationType.error;
+      }
+      _showNotification(message, type: type);
     }
   }
 
@@ -695,9 +702,7 @@ class _SessionPageState extends State<SessionPage> {
       _signalingClient.sendOffer(offer.sdp!);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('正在切换到 $codec 编码...')),
-        );
+        _showNotification('正在切换到 $codec 编码...');
       }
 
       _logger.i('Codec change offer sent, waiting for answer');
@@ -708,9 +713,7 @@ class _SessionPageState extends State<SessionPage> {
         stackTrace: stackTrace,
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('切换编码失败: $e')),
-        );
+        _showNotification('切换编码失败: $e', type: SwitchNotificationType.error);
       }
     }
   }
@@ -1446,12 +1449,7 @@ class _SessionPageState extends State<SessionPage> {
     }
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$modeName: $modeDesc'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
+      _showNotification('$modeName: $modeDesc');
     }
   }
 
@@ -1509,8 +1507,21 @@ class _SessionPageState extends State<SessionPage> {
   }
 
   void _disconnect() {
-    _shutdownQoSSystem();
-    Navigator.of(context).pop();
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.7),
+      builder: (context) => SwitchConfirmDialog(
+        title: 'Exit Session',
+        content: 'Are you sure you want to disconnect from the remote desktop?',
+        confirmText: 'Exit',
+        cancelText: 'Cancel',
+        isDestructive: true,
+        onConfirm: () {
+          _shutdownQoSSystem();
+          Navigator.of(context).pop();
+        },
+      ),
+    );
   }
 
   Size _getVideoSize() {
@@ -1674,38 +1685,72 @@ class _SessionPageState extends State<SessionPage> {
           if (_isFullScreen) ...[
             // Display mode toggle button
             Positioned(
-              top: 16,
-              right: 80,
+              top: 24,
+              right: 88,
               child: SafeArea(
                 child: Material(
-                  color: Colors.black.withOpacity(0.4),
-                  borderRadius: BorderRadius.circular(24),
-                  child: IconButton(
-                    icon: Icon(
-                      _getDisplayModeIcon(),
-                      color: Colors.white,
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _cycleDisplayMode,
+                    borderRadius: BorderRadius.circular(24),
+                    child: Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2D2D2D).withOpacity(0.9),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.1),
+                          width: 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.3),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        _getDisplayModeIcon(),
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
-                    tooltip: _getDisplayModeTooltip(),
-                    onPressed: _cycleDisplayMode,
                   ),
                 ),
               ),
             ),
             // Full screen exit button
             Positioned(
-              top: 16,
-              right: 16,
+              top: 24,
+              right: 24,
               child: SafeArea(
                 child: Material(
-                  color: Colors.black.withOpacity(0.4),
-                  borderRadius: BorderRadius.circular(24),
-                  child: IconButton(
-                    icon: const Icon(
-                      Icons.fullscreen_exit,
-                      color: Colors.white,
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _toggleFullScreen,
+                    borderRadius: BorderRadius.circular(24),
+                    child: Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE60012).withOpacity(0.9),
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFE60012).withOpacity(0.4),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.fullscreen_exit,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
-                    tooltip: '退出全屏',
-                    onPressed: _toggleFullScreen,
                   ),
                 ),
               ),
@@ -1909,15 +1954,9 @@ class _SessionPageState extends State<SessionPage> {
         ),
       );
     } else {
-      content = Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 16),
-            Text(_statusMessage, style: const TextStyle(color: Colors.white)),
-          ],
-        ),
+      content = SwitchLoadingScreen(
+        statusMessage: _statusMessage,
+        onCancel: _disconnect,
       );
     }
 
@@ -1930,7 +1969,33 @@ class _SessionPageState extends State<SessionPage> {
             left: 16,
             child: MetricsOverlay(statsCollector: _statsCollector!),
           ),
+        if (_currentNotification != null)
+          SwitchNotification(
+            key: ValueKey(_currentNotification!.message),
+            message: _currentNotification!.message,
+            type: _currentNotification!.type,
+            onDismiss: () {
+              setState(() {
+                _currentNotification = null;
+              });
+            },
+          ),
       ],
     );
   }
+
+  _NotificationData? _currentNotification;
+
+  void _showNotification(String message, {SwitchNotificationType type = SwitchNotificationType.info}) {
+    setState(() {
+      _currentNotification = _NotificationData(message, type);
+    });
+  }
+}
+
+class _NotificationData {
+  final String message;
+  final SwitchNotificationType type;
+
+  _NotificationData(this.message, this.type);
 }

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:logger/logger.dart';
 import '../../app/routes.dart';
 
-/// Connection configuration page
+/// Connection configuration page styled as a Switch system app
 class ConnectPage extends StatefulWidget {
   const ConnectPage({Key? key}) : super(key: key);
 
@@ -44,7 +44,6 @@ class _ConnectPageState extends State<ConnectPage> {
 
     _logger.i('Connecting to room: $roomId');
 
-    // Navigate to session page with connection parameters
     Navigator.of(context)
         .pushNamed(
           '/session',
@@ -55,133 +54,143 @@ class _ConnectPageState extends State<ConnectPage> {
           },
         )
         .then((_) {
-          setState(() {
-            _isConnecting = false;
-          });
+          if (mounted) {
+            setState(() {
+              _isConnecting = false;
+            });
+          }
         });
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
     return Scaffold(
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('RealDesk Remote Control'),
-        centerTitle: true,
+        title: const Text('Controllers & Sensors'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
         actions: [
           IconButton(
-            tooltip: '设置',
             icon: const Icon(Icons.settings),
-            onPressed: () {
-              Navigator.of(context).pushNamed(AppRoutes.settings);
-            },
+            onPressed: () => Navigator.of(context).pushNamed(AppRoutes.settings),
           ),
         ],
       ),
       body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 500),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Logo or icon
-                  const Icon(
-                    Icons.desktop_windows,
-                    size: 80,
-                    color: Colors.blue,
-                  ),
-                  const SizedBox(height: 32),
-
-                  // Title
-                  Text(
-                    '连接到远程桌面',
-                    style: Theme.of(context).textTheme.headlineSmall,
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 32),
-
-                  // Signaling URL input
-                  TextFormField(
-                    controller: _signalingUrlController,
-                    decoration: const InputDecoration(
-                      labelText: '信令服务器地址',
-                      hintText: 'ws://example.com:3000/signaling',
-                      prefixIcon: Icon(Icons.dns),
-                      border: OutlineInputBorder(),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 600),
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Header Icon
+              Container(
+                width: 100,
+                height: 100,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: theme.cardTheme.color,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 20,
+                      offset: const Offset(0, 10),
                     ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return '请输入信令服务器地址';
-                      }
-                      if (!value.startsWith('ws://') &&
-                          !value.startsWith('wss://')) {
-                        return '地址必须以 ws:// 或 wss:// 开头';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Room ID input
-                  TextFormField(
-                    controller: _roomIdController,
-                    decoration: const InputDecoration(
-                      labelText: '房间 ID',
-                      hintText: '输入房间标识符',
-                      prefixIcon: Icon(Icons.meeting_room),
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return '请输入房间 ID';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Token input (optional)
-                  TextFormField(
-                    controller: _tokenController,
-                    decoration: const InputDecoration(
-                      labelText: '访问令牌（可选）',
-                      hintText: '如果需要，请输入访问令牌',
-                      prefixIcon: Icon(Icons.key),
-                      border: OutlineInputBorder(),
-                    ),
-                    obscureText: true,
-                  ),
-                  const SizedBox(height: 32),
-
-                  // Connect button
-                  ElevatedButton(
-                    onPressed: _isConnecting ? null : _connect,
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                    child:
-                        _isConnecting
-                            ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                            : const Text('连接', style: TextStyle(fontSize: 16)),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Help text
-                  Text(
-                    '提示：确保远程主机正在运行并且网络连接正常',
-                    style: Theme.of(context).textTheme.bodySmall,
-                    textAlign: TextAlign.center,
-                  ),
-                ],
+                  ],
+                ),
+                child: Icon(
+                  Icons.desktop_windows,
+                  size: 50,
+                  color: theme.colorScheme.primary,
+                ),
               ),
-            ),
+              const SizedBox(height: 40),
+              
+              // Form Card
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Remote Connection',
+                          style: theme.textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 32),
+                        
+                        TextFormField(
+                          controller: _signalingUrlController,
+                          decoration: const InputDecoration(
+                            labelText: 'Signaling Server',
+                            prefixIcon: Icon(Icons.dns),
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Required';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 24),
+                        
+                        TextFormField(
+                          controller: _roomIdController,
+                          decoration: const InputDecoration(
+                            labelText: 'Room ID',
+                            prefixIcon: Icon(Icons.meeting_room),
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Required';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 24),
+                        
+                        TextFormField(
+                          controller: _tokenController,
+                          decoration: const InputDecoration(
+                            labelText: 'Token (Optional)',
+                            prefixIcon: Icon(Icons.key),
+                          ),
+                          obscureText: true,
+                        ),
+                        const SizedBox(height: 40),
+                        
+                        SizedBox(
+                          height: 56,
+                          child: ElevatedButton(
+                            onPressed: _isConnecting ? null : _connect,
+                            child: _isConnecting
+                                ? const SizedBox(
+                                    height: 24,
+                                    width: 24,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Text('Connect'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

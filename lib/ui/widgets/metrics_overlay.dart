@@ -22,14 +22,21 @@ class MetricsOverlay extends StatelessWidget {
         final quality = metrics.quality;
 
         return Container(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.35),
-            borderRadius: BorderRadius.circular(8),
+            color: const Color(0xFF2D2D2D).withOpacity(0.9),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: _getQualityColor(quality),
               width: 2,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -44,51 +51,62 @@ class MetricsOverlay extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: _getQualityColor(quality),
                       shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: _getQualityColor(quality).withOpacity(0.5),
+                          blurRadius: 6,
+                          spreadRadius: 1,
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 12),
                   Text(
-                    _getQualityText(quality),
+                    _getQualityText(quality).toUpperCase(),
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
+                      letterSpacing: 1,
+                      fontSize: 14,
                     ),
                   ),
                 ],
               ),
-              const Divider(color: Colors.grey),
+              const SizedBox(height: 12),
+              Divider(color: Colors.white.withOpacity(0.1), height: 1),
+              const SizedBox(height: 12),
 
               // Metrics
               _buildMetricRow('FPS', '${metrics.fps.toStringAsFixed(1)}'),
-              _buildMetricRow('视频码率', metrics.videoBitrateFormatted),
-              _buildMetricRow('音频码率', metrics.audioBitrateFormatted),
+              _buildMetricRow('VIDEO', metrics.videoBitrateFormatted),
+              _buildMetricRow('AUDIO', metrics.audioBitrateFormatted),
               _buildMetricRow('RTT', '${metrics.rtt} ms'),
               _buildMetricRow(
-                'Jitter',
+                'JITTER',
                 '${metrics.jitter.toStringAsFixed(2)} ms',
               ),
               _buildMetricRow(
-                '丢包率',
+                'LOSS',
                 '${metrics.packetLoss.toStringAsFixed(2)}%',
               ),
               _buildMetricRow(
-                '编码方式',
-                metrics.codec.isNotEmpty ? metrics.codec : '未知',
+                'CODEC',
+                metrics.codec.isNotEmpty ? metrics.codec : 'UNKNOWN',
               ),
               _buildMetricRow(
-                '本地ICE服务器',
+                'ICE (L)',
                 metrics.localIceServer.isNotEmpty
                     ? metrics.localIceServer
-                    : '未连接',
+                    : 'N/A',
               ),
               _buildMetricRow(
-                '远程ICE服务器',
+                'ICE (R)',
                 metrics.remoteIceServer.isNotEmpty
                     ? metrics.remoteIceServer
-                    : '未连接',
+                    : 'N/A',
               ),
-              _buildMetricRow('已接收帧', '${metrics.framesReceived}'),
-              _buildMetricRow('丢失帧', '${metrics.framesDropped}'),
+              _buildMetricRow('RX FRAMES', '${metrics.framesReceived}'),
+              _buildMetricRow('DROP FRAMES', '${metrics.framesDropped}'),
             ],
           ),
         );
@@ -141,17 +159,17 @@ class MetricsOverlay extends StatelessWidget {
   String _getQualityText(ConnectionQuality quality) {
     switch (quality) {
       case ConnectionQuality.excellent:
-        return '优秀';
+        return 'Excellent';
       case ConnectionQuality.good:
-        return '良好';
+        return 'Good';
       case ConnectionQuality.fair:
-        return '一般';
+        return 'Fair';
       case ConnectionQuality.poor:
-        return '较差';
+        return 'Poor';
       case ConnectionQuality.bad:
-        return '很差';
+        return 'Bad';
       case ConnectionQuality.unknown:
-        return '未知';
+        return 'Unknown';
     }
   }
 }

@@ -59,43 +59,113 @@ class RealDeskApp extends StatelessWidget {
       title: 'RealDesk Remote Control',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        primarySwatch: Colors.blue,
-        brightness: Brightness.light,
         useMaterial3: true,
+        brightness: Brightness.light,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
+          seedColor: const Color(0xFFE60012), // Nintendo Red
           brightness: Brightness.light,
+          surface: const Color(0xFFEBEBEB),
+          background: const Color(0xFFEBEBEB),
         ),
-        appBarTheme: const AppBarTheme(centerTitle: true, elevation: 0),
+        scaffoldBackgroundColor: const Color(0xFFEBEBEB),
+        appBarTheme: const AppBarTheme(
+          centerTitle: true,
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+          foregroundColor: Colors.black,
+        ),
+        cardTheme: CardThemeData(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          color: Colors.white,
+        ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          fillColor: Colors.white,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(24),
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(24),
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(24),
+            borderSide: const BorderSide(color: Color(0xFFE60012), width: 2),
+          ),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFE60012),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(32),
+            ),
+            textStyle: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
             ),
           ),
         ),
       ),
       darkTheme: ThemeData(
-        primarySwatch: Colors.blue,
-        brightness: Brightness.dark,
         useMaterial3: true,
+        brightness: Brightness.dark,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
+          seedColor: const Color(0xFFE60012),
           brightness: Brightness.dark,
+          surface: const Color(0xFF2D2D2D),
+          background: const Color(0xFF1F1F1F),
         ),
-        appBarTheme: const AppBarTheme(centerTitle: true, elevation: 0),
+        scaffoldBackgroundColor: const Color(0xFF1F1F1F), // Switch Dark Grey
+        appBarTheme: const AppBarTheme(
+          centerTitle: true,
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+          foregroundColor: Colors.white,
+        ),
+        cardTheme: CardThemeData(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          color: const Color(0xFF2D2D2D),
+        ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          fillColor: const Color(0xFF2D2D2D),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(24),
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(24),
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(24),
+            borderSide: const BorderSide(color: Color(0xFFE60012), width: 2),
+          ),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFE60012),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(32),
+            ),
+            textStyle: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
             ),
           ),
         ),
