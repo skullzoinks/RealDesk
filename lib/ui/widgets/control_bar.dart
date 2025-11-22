@@ -39,96 +39,99 @@ class ControlBar extends StatelessWidget {
     final isLandscape = orientation == Orientation.landscape;
     final theme = Theme.of(context);
 
-    return Center(
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2D2D2D).withOpacity(0.95),
-          borderRadius: BorderRadius.circular(32),
-          border: Border.all(
-            color: Colors.white.withOpacity(0.1),
-            width: 1,
+    // Wrap entire control bar in RepaintBoundary to isolate from video rendering
+    return RepaintBoundary(
+      child: Center(
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF2D2D2D).withOpacity(0.95),
+            borderRadius: BorderRadius.circular(32),
+            border: Border.all(
+              color: Colors.white.withOpacity(0.1),
+              width: 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.5),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        padding: const EdgeInsets.symmetric(
-          horizontal: 24,
-          vertical: 12,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Connection Status Indicator
-            _buildStatusIndicator(),
-            
-            const SizedBox(width: 16),
-            Container(
-              width: 1,
-              height: 24,
-              color: Colors.white.withOpacity(0.2),
-            ),
-            const SizedBox(width: 16),
-
-            // Controls
-            _buildControlButton(
-              icon: showMetrics ? Icons.analytics : Icons.analytics_outlined,
-              tooltip: showMetrics ? 'Hide Metrics' : 'Show Metrics',
-              isActive: showMetrics,
-              onTap: onToggleMetrics,
-            ),
-            const SizedBox(width: 12),
-            
-            _buildControlButton(
-              icon: mouseMode == MouseMode.absolute ? Icons.touch_app : Icons.mouse,
-              tooltip: mouseMode == MouseMode.absolute ? 'Switch to Relative' : 'Switch to Absolute',
-              isActive: mouseMode == MouseMode.relative,
-              onTap: onToggleMouseMode,
-            ),
-            const SizedBox(width: 12),
-
-            _buildControlButton(
-              icon: isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-              tooltip: isFullScreen ? 'Exit Fullscreen' : 'Enter Fullscreen',
-              isActive: isFullScreen,
-              onTap: onToggleFullScreen,
-            ),
-            
-            if (onToggleAudio != null) ...[
-              const SizedBox(width: 12),
-              _buildControlButton(
-                icon: (audioEnabled ?? true) ? Icons.volume_up : Icons.volume_off,
-                tooltip: (audioEnabled ?? true) ? 'Mute Audio' : 'Unmute Audio',
-                isActive: audioEnabled ?? true,
-                onTap: onToggleAudio!,
+          padding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 12,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Connection Status Indicator
+              _buildStatusIndicator(),
+              
+              const SizedBox(width: 16),
+              Container(
+                width: 1,
+                height: 24,
+                color: Colors.white.withOpacity(0.2),
               ),
-            ],
+              const SizedBox(width: 16),
 
-            if (onToggleOrientation != null) ...[
-              const SizedBox(width: 12),
+              // Controls
               _buildControlButton(
-                icon: Icons.screen_rotation,
-                tooltip: 'Rotate Screen',
-                onTap: onToggleOrientation!,
+                icon: showMetrics ? Icons.analytics : Icons.analytics_outlined,
+                tooltip: showMetrics ? 'Hide Metrics' : 'Show Metrics',
+                isActive: showMetrics,
+                onTap: onToggleMetrics,
               ),
+              const SizedBox(width: 12),
+              
+              _buildControlButton(
+                icon: mouseMode == MouseMode.absolute ? Icons.touch_app : Icons.mouse,
+                tooltip: mouseMode == MouseMode.absolute ? 'Switch to Relative' : 'Switch to Absolute',
+                isActive: mouseMode == MouseMode.relative,
+                onTap: onToggleMouseMode,
+              ),
+              const SizedBox(width: 12),
+
+              _buildControlButton(
+                icon: isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                tooltip: isFullScreen ? 'Exit Fullscreen' : 'Enter Fullscreen',
+                isActive: isFullScreen,
+                onTap: onToggleFullScreen,
+              ),
+              
+              if (onToggleAudio != null) ...[
+                const SizedBox(width: 12),
+                _buildControlButton(
+                  icon: (audioEnabled ?? true) ? Icons.volume_up : Icons.volume_off,
+                  tooltip: (audioEnabled ?? true) ? 'Mute Audio' : 'Unmute Audio',
+                  isActive: audioEnabled ?? true,
+                  onTap: onToggleAudio!,
+                ),
+              ],
+
+              if (onToggleOrientation != null) ...[
+                const SizedBox(width: 12),
+                _buildControlButton(
+                  icon: Icons.screen_rotation,
+                  tooltip: 'Rotate Screen',
+                  onTap: onToggleOrientation!,
+                ),
+              ],
+
+              const SizedBox(width: 16),
+              Container(
+                width: 1,
+                height: 24,
+                color: Colors.white.withOpacity(0.2),
+              ),
+              const SizedBox(width: 16),
+
+              // Disconnect Button
+              _buildDisconnectButton(theme),
             ],
-
-            const SizedBox(width: 16),
-            Container(
-              width: 1,
-              height: 24,
-              color: Colors.white.withOpacity(0.2),
-            ),
-            const SizedBox(width: 16),
-
-            // Disconnect Button
-            _buildDisconnectButton(theme),
-          ],
+          ),
         ),
       ),
     );

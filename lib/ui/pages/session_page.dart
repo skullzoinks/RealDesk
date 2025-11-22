@@ -96,13 +96,16 @@ class _SessionPageState extends State<SessionPage> {
   ui.Image? _remoteCursorImage;
   bool _remoteCursorVisible = false;
   Offset _cursorHotspot = Offset.zero;
-  Offset _pointerPosition = Offset.zero;
+  // Pointer position for local rendering of remote cursor
+  final ValueNotifier<Offset> _pointerPositionNotifier =
+      ValueNotifier(Offset.zero);
+  Offset get _pointerPosition => _pointerPositionNotifier.value;
+  set _pointerPosition(Offset value) => _pointerPositionNotifier.value = value;
   bool _isPointerInsideVideo = false;
   int _cursorImageVersion = 0;
   Size _remoteVideoSize = Size.zero;
 
   bool get _shouldShowRemoteCursor =>
-      _mouseMode == MouseMode.absolute &&
       _remoteCursorImage != null &&
       _remoteCursorVisible &&
       _isPointerInsideVideo;
@@ -1030,6 +1033,18 @@ class _SessionPageState extends State<SessionPage> {
           _remoteCursorImage = image;
           _cursorHotspot = Offset(hotspotX, hotspotY);
           _remoteCursorVisible = visible;
+
+          // Auto-switch logic for FPS games
+          if (!visible && _mouseMode == MouseMode.absolute) {
+             _mouseMode = MouseMode.relative;
+             _mouseController?.toggleMode();
+             _showNotification('Entering FPS Mode (Relative Mouse)', type: SwitchNotificationType.info);
+          } else if (visible && _mouseMode == MouseMode.relative) {
+             _mouseMode = MouseMode.absolute;
+             _mouseController?.toggleMode();
+             _showNotification('Exiting FPS Mode (Absolute Mouse)', type: SwitchNotificationType.info);
+          }
+
           _logger.i(
               '光标图像已设置 [Protobuf]: ${image.width}x${image.height}, hotspot=($hotspotX,$hotspotY), visible=$visible');
         });
@@ -1146,10 +1161,12 @@ class _SessionPageState extends State<SessionPage> {
       return;
     }
 
-    setState(() {
-      _pointerPosition = newPosition;
-      _isPointerInsideVideo = true; // Ensure cursor is visible
-    });
+    _pointerPosition = newPosition;
+    if (!_isPointerInsideVideo) {
+      setState(() {
+        _isPointerInsideVideo = true; // Ensure cursor is visible
+      });
+    }
   }
 
   void _handleCursorImageMessage(Map<String, dynamic> payload) {
@@ -1215,6 +1232,21 @@ class _SessionPageState extends State<SessionPage> {
           _remoteCursorImage = image;
           _cursorHotspot = Offset(hotspotX, hotspotY);
           _remoteCursorVisible = visible;
+          
+          // Auto-switch logic for FPS games
+          if (!visible && _mouseMode == MouseMode.absolute) {
+             _mouseMode = MouseMode.relative;
+             _mouseController?.toggleMode(); // Ensure controller state matches
+             _showNotification('Entering FPS Mode (Relative Mouse)', type: SwitchNotificationType.info);
+          } else if (visible && _mouseMode == MouseMode.relative) {
+             // Optional: Switch back to absolute if cursor reappears?
+             // The prompt implies "until the remote server transmits mouse cursor information".
+             // If we receive a visible cursor, it means we are back to normal.
+             _mouseMode = MouseMode.absolute;
+             _mouseController?.toggleMode();
+             _showNotification('Exiting FPS Mode (Absolute Mouse)', type: SwitchNotificationType.info);
+          }
+
           _logger.i(
               '光标图像已设置: ${image.width}x${image.height}, hotspot=($hotspotX,$hotspotY), visible=$visible');
         });
@@ -1337,43 +1369,23 @@ class _SessionPageState extends State<SessionPage> {
       return;
     }
 
-    // Throttle pointer position updates to reduce CPU usage
-    final now = DateTime.now();
-    final timeSinceLastEvent =
-        now.difference(_lastPointerEventTime).inMilliseconds;
-    final throttleMs =
-        _mouseMode == MouseMode.relative ? 0 : _pointerEventThrottleMs;
-    if (throttleMs > 0 && timeSinceLastEvent < throttleMs) {
+    // In relative mode with remote cursor, position is defined by server updates only.
+    // In absolute mode, position is defined by local mouse events.
+    if (_shouldShowRemoteCursor && _mouseMode == MouseMode.relative) {
       return;
     }
-    _lastPointerEventTime = now;
 
     final adjusted = geometry.clampLocal(event.localPosition);
-
     final minDeltaSquared = _mouseMode == MouseMode.relative ? 0.16 : 1.0;
 
-    if (_shouldShowRemoteCursor) {
-      final dx = adjusted.dx - _pointerPosition.dx;
-      final dy = adjusted.dy - _pointerPosition.dy;
-      // Increased threshold to reduce setState calls
-      if ((dx * dx + dy * dy) < minDeltaSquared) {
-        return;
-      }
-      setState(() {
-        _pointerPosition = adjusted;
-      });
-      _logger.d(
-          '远程光标位置更新: (${adjusted.dx.toStringAsFixed(1)}, ${adjusted.dy.toStringAsFixed(1)})');
-    } else if (_pointerPosition != adjusted) {
+    if (_pointerPosition != adjusted) {
       // Only update if position changed significantly
       final dx = adjusted.dx - _pointerPosition.dx;
       final dy = adjusted.dy - _pointerPosition.dy;
       if ((dx * dx + dy * dy) < minDeltaSquared) {
         return;
       }
-      setState(() {
-        _pointerPosition = adjusted;
-      });
+      _pointerPosition = adjusted;
     }
   }
 
@@ -1647,6 +1659,7 @@ class _SessionPageState extends State<SessionPage> {
       }
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
+    _pointerPositionNotifier.dispose();
     super.dispose();
   }
 
@@ -1655,33 +1668,41 @@ class _SessionPageState extends State<SessionPage> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
+        fit: StackFit.expand,
         children: [
-          Column(
-            children: [
-              Expanded(child: _buildRemoteSurface()),
-              if (!_isFullScreen)
-                SafeArea(
-                  top: false,
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ControlBar(
-                      isConnected: _isConnected,
-                      showMetrics: _showMetrics,
-                      mouseMode: _mouseMode,
-                      onToggleMetrics: _toggleMetrics,
-                      onToggleMouseMode: _toggleMouseMode,
-                      onToggleFullScreen: _toggleFullScreen,
-                      onDisconnect: _disconnect,
-                      isFullScreen: _isFullScreen,
-                      onToggleOrientation: _toggleOrientation,
-                      onOrientationMenu: _showOrientationMenu,
-                      onToggleAudio: _toggleAudio,
-                      audioEnabled: !AudioManager.instance.muted,
-                    ),
-                  ),
-                ),
-            ],
+          // Video layer - isolated with RepaintBoundary
+          Positioned.fill(
+            child: RepaintBoundary(
+              child: _buildRemoteSurface(),
+            ),
           ),
+          
+          // Control bar layer - positioned at bottom
+          if (!_isFullScreen)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: SafeArea(
+                top: false,
+                child: ControlBar(
+                  isConnected: _isConnected,
+                  showMetrics: _showMetrics,
+                  mouseMode: _mouseMode,
+                  onToggleMetrics: _toggleMetrics,
+                  onToggleMouseMode: _toggleMouseMode,
+                  onToggleFullScreen: _toggleFullScreen,
+                  onDisconnect: _disconnect,
+                  isFullScreen: _isFullScreen,
+                  onToggleOrientation: _toggleOrientation,
+                  onOrientationMenu: _showOrientationMenu,
+                  onToggleAudio: _toggleAudio,
+                  audioEnabled: !AudioManager.instance.muted,
+                ),
+              ),
+            ),
+            
+          // Fullscreen controls
           if (_isFullScreen) ...[
             // Display mode toggle button
             Positioned(
@@ -1788,12 +1809,34 @@ class _SessionPageState extends State<SessionPage> {
             _mouseController?.onPointerUp(event, geometry);
           },
           onPointerMove: (event) {
+            // Throttle pointer events to reduce CPU/Network usage
+            final now = DateTime.now();
+            final timeSinceLastEvent =
+                now.difference(_lastPointerEventTime).inMilliseconds;
+            final throttleMs =
+                _mouseMode == MouseMode.relative ? 0 : _pointerEventThrottleMs;
+            if (throttleMs > 0 && timeSinceLastEvent < throttleMs) {
+              return;
+            }
+            _lastPointerEventTime = now;
+
             final viewSize = _getVideoSize();
             final geometry = _buildMouseGeometry(viewSize);
             _recordPointerPosition(event, geometry);
             _mouseController?.onPointerMove(event, geometry);
           },
           onPointerHover: (event) {
+            // Throttle pointer events
+            final now = DateTime.now();
+            final timeSinceLastEvent =
+                now.difference(_lastPointerEventTime).inMilliseconds;
+            final throttleMs =
+                _mouseMode == MouseMode.relative ? 0 : _pointerEventThrottleMs;
+            if (throttleMs > 0 && timeSinceLastEvent < throttleMs) {
+              return;
+            }
+            _lastPointerEventTime = now;
+
             final viewSize = _getVideoSize();
             final geometry = _buildMouseGeometry(viewSize);
             _updatePointerInside(true);
@@ -1838,86 +1881,13 @@ class _SessionPageState extends State<SessionPage> {
                   clipBehavior: Clip.none,
                   children: [
                     Positioned.fill(
-                      child: _displayMode == DisplayMode.contain
-                          ? RemoteMediaRenderer(
-                              stream: _remoteStream,
-                              objectFit: RTCVideoViewObjectFit
-                                  .RTCVideoViewObjectFitContain,
-                              filterQuality: _videoFilterQuality,
-                              onVideoSizeChanged: _handleVideoSizeChanged,
-                            )
-                          : LayoutBuilder(
-                              builder: (context, constraints) {
-                                if (_shouldForceMobileWideAspectRatio()) {
-                                  final baseWidth = _remoteVideoSize.width > 0
-                                      ? _remoteVideoSize.width
-                                      : 1920.0;
-                                  final baseHeight = _remoteVideoSize.height > 0
-                                      ? _remoteVideoSize.height
-                                      : 1080.0;
-
-                                  final videoBox = baseWidth > 0 &&
-                                          baseHeight > 0
-                                      ? SizedBox(
-                                          width: baseWidth,
-                                          height: baseHeight,
-                                          child: RemoteMediaRenderer(
-                                            stream: _remoteStream,
-                                            objectFit: RTCVideoViewObjectFit
-                                                .RTCVideoViewObjectFitContain,
-                                            filterQuality: _videoFilterQuality,
-                                            onVideoSizeChanged:
-                                                _handleVideoSizeChanged,
-                                          ),
-                                        )
-                                      : RemoteMediaRenderer(
-                                          stream: _remoteStream,
-                                          objectFit: RTCVideoViewObjectFit
-                                              .RTCVideoViewObjectFitContain,
-                                          filterQuality: _videoFilterQuality,
-                                          onVideoSizeChanged:
-                                              _handleVideoSizeChanged,
-                                        );
-
-                                  return Center(
-                                    child: AspectRatio(
-                                      aspectRatio: 20 / 9,
-                                      child: Container(
-                                        color: Colors.black,
-                                        child: FittedBox(
-                                          fit: BoxFit.contain,
-                                          child: videoBox,
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                }
-
-                                return SizedBox(
-                                  width: constraints.maxWidth,
-                                  height: constraints.maxHeight,
-                                  child: FittedBox(
-                                    fit: BoxFit.fill,
-                                    child: SizedBox(
-                                      width: _remoteVideoSize.width > 0
-                                          ? _remoteVideoSize.width
-                                          : 1920.0,
-                                      height: _remoteVideoSize.height > 0
-                                          ? _remoteVideoSize.height
-                                          : 1080.0,
-                                      child: RemoteMediaRenderer(
-                                        stream: _remoteStream,
-                                        objectFit: RTCVideoViewObjectFit
-                                            .RTCVideoViewObjectFitCover,
-                                        filterQuality: _videoFilterQuality,
-                                        onVideoSizeChanged:
-                                            _handleVideoSizeChanged,
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
+                      child: _IsolatedVideoRenderer(
+                        stream: _remoteStream!,
+                        displayMode: _displayMode,
+                        remoteVideoSize: _remoteVideoSize,
+                        videoFilterQuality: _videoFilterQuality,
+                        onVideoSizeChanged: _handleVideoSizeChanged,
+                      ),
                     ),
                     // Audio renderer - MUST be visible on Windows for audio to play
                     // Positioned in bottom-right corner, nearly transparent
@@ -1938,9 +1908,15 @@ class _SessionPageState extends State<SessionPage> {
                         ),
                       ),
                     if (_shouldShowRemoteCursor && _remoteCursorImage != null)
-                      Positioned(
-                        left: _pointerPosition.dx - _cursorHotspot.dx,
-                        top: _pointerPosition.dy - _cursorHotspot.dy,
+                      ValueListenableBuilder<Offset>(
+                        valueListenable: _pointerPositionNotifier,
+                        builder: (context, position, child) {
+                          return Positioned(
+                            left: position.dx - _cursorHotspot.dx,
+                            top: position.dy - _cursorHotspot.dy,
+                            child: child!,
+                          );
+                        },
                         child: RawImage(
                           image: _remoteCursorImage,
                           filterQuality: FilterQuality.high,
@@ -1998,4 +1974,115 @@ class _NotificationData {
   final SwitchNotificationType type;
 
   _NotificationData(this.message, this.type);
+}
+
+/// Isolated video renderer widget that only rebuilds when video-specific properties change
+class _IsolatedVideoRenderer extends StatefulWidget {
+  const _IsolatedVideoRenderer({
+    Key? key,
+    required this.stream,
+    required this.displayMode,
+    required this.remoteVideoSize,
+    required this.videoFilterQuality,
+    required this.onVideoSizeChanged,
+  }) : super(key: key);
+
+  final MediaStream stream;
+  final DisplayMode displayMode;
+  final Size remoteVideoSize;
+  final FilterQuality videoFilterQuality;
+  final void Function(int width, int height) onVideoSizeChanged;
+
+  @override
+  State<_IsolatedVideoRenderer> createState() => _IsolatedVideoRendererState();
+}
+
+class _IsolatedVideoRendererState extends State<_IsolatedVideoRenderer> {
+  bool _shouldForceMobileWideAspectRatio() {
+    if (kIsWeb) {
+      return false;
+    }
+    final platform = defaultTargetPlatform;
+    return widget.displayMode == DisplayMode.fit &&
+        (platform == TargetPlatform.android || platform == TargetPlatform.iOS);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.displayMode == DisplayMode.contain) {
+      return RemoteMediaRenderer(
+        stream: widget.stream,
+        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+        filterQuality: widget.videoFilterQuality,
+        onVideoSizeChanged: widget.onVideoSizeChanged,
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (_shouldForceMobileWideAspectRatio()) {
+          final baseWidth = widget.remoteVideoSize.width > 0
+              ? widget.remoteVideoSize.width
+              : 1920.0;
+          final baseHeight = widget.remoteVideoSize.height > 0
+              ? widget.remoteVideoSize.height
+              : 1080.0;
+
+          final videoBox = baseWidth > 0 && baseHeight > 0
+              ? SizedBox(
+                  width: baseWidth,
+                  height: baseHeight,
+                  child: RemoteMediaRenderer(
+                    stream: widget.stream,
+                    objectFit:
+                        RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                    filterQuality: widget.videoFilterQuality,
+                    onVideoSizeChanged: widget.onVideoSizeChanged,
+                  ),
+                )
+              : RemoteMediaRenderer(
+                  stream: widget.stream,
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                  filterQuality: widget.videoFilterQuality,
+                  onVideoSizeChanged: widget.onVideoSizeChanged,
+                );
+
+          return Center(
+            child: AspectRatio(
+              aspectRatio: 20 / 9,
+              child: Container(
+                color: Colors.black,
+                child: FittedBox(
+                  fit: BoxFit.contain,
+                  child: videoBox,
+                ),
+              ),
+            ),
+          );
+        }
+
+        return SizedBox(
+          width: constraints.maxWidth,
+          height: constraints.maxHeight,
+          child: FittedBox(
+            fit: BoxFit.fill,
+            child: SizedBox(
+              width: widget.remoteVideoSize.width > 0
+                  ? widget.remoteVideoSize.width
+                  : 1920.0,
+              height: widget.remoteVideoSize.height > 0
+                  ? widget.remoteVideoSize.height
+                  : 1080.0,
+              child: RemoteMediaRenderer(
+                stream: widget.stream,
+                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                filterQuality: widget.videoFilterQuality,
+                onVideoSizeChanged: widget.onVideoSizeChanged,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }

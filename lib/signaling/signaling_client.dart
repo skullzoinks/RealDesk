@@ -175,7 +175,9 @@ class SignalingClient {
         return; // ignore
       }
 
-      _messageController.add(jsonData);
+      if (!_messageController.isClosed) {
+        _messageController.add(jsonData);
+      }
     } catch (e) {
       _logger.e('Failed to parse message: $e');
     }
@@ -227,7 +229,9 @@ class SignalingClient {
   void _updateState(ConnectionState newState) {
     if (_state != newState) {
       _state = newState;
-      _stateController.add(newState);
+      if (!_stateController.isClosed) {
+        _stateController.add(newState);
+      }
     }
   }
 

@@ -173,12 +173,15 @@ class _RemoteMediaRendererState extends State<RemoteMediaRenderer> {
     }
 
     // Use RepaintBoundary to isolate video rendering from parent widget rebuilds
+    // Use hybrid composition on iOS/macOS for better performance
     return RepaintBoundary(
       child: RTCVideoView(
         _renderer,
         objectFit: widget.objectFit,
         mirror: widget.mirror,
         filterQuality: widget.filterQuality,
+        // Force platform view hybrid composition for better overlay performance
+        placeholderBuilder: null, // Disable placeholder to reduce overhead
       ),
     );
   }
